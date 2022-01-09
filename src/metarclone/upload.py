@@ -11,21 +11,23 @@ from .utils import wrap_oserror
 
 
 class SyncWalkResult:
-    # The values of an empty directory
-    total_size = 0
-    total_files = 1
-    total_transfer_size = 0
-    total_transfer_files = 1
-    force_retain = False
-    hard_link_map: Dict[Tuple[int, int], bytes] = {}
-    # files_to_tar is None -> some child has already tar'd
-    # not include the current directory
-    files_to_tar: Optional[Set[bytes]] = set()
-    files_to_delete: List[bytes] = []
-    retained_directories: Optional[List[bytes]] = None
-    metadata: Optional[dict] = None
-    first_checksum: Optional[bytes] = None
-    second_checksum: Optional[bytes] = None
+    def __init__(self):
+        # The values of an empty directory
+        self.total_size = 0
+        self.total_files = 1
+        self.total_transfer_size = 0
+        self.total_transfer_files = 1
+        self.force_retain = False
+        self.hard_link_map: Dict[Tuple[int, int], bytes] = {}
+        self.hard_link_list: List[Tuple[bytes, bytes]] = []
+        # files_to_tar is None -> some child has already tar'd
+        # not include the current directory
+        self.files_to_tar: Optional[Set[bytes]] = set()
+        self.files_to_delete: List[bytes] = []
+        self.retained_directories: Optional[List[bytes]] = None
+        self.metadata: Optional[dict] = None
+        self.first_checksum: Optional[bytes] = None
+        self.second_checksum: Optional[bytes] = None
 
     def set_force_retain(self, path: bytes):
         if not self.force_retain:
@@ -78,7 +80,7 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
             # TODO
 
     def upload(files: List[bytes], dest: str) -> bool:
-        print(f'Upload {path} {files} -> {dest}')
+        print(f'Upload {path}/{files} -> {dest}')
         # TODO
         return True
 
@@ -100,6 +102,11 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
             keep = False
             walk_res = ChecksumWalkResult()
             if all([f in stat_map for f in file_list]):
+                # We compute this checksum in a separate run.
+                # This run only affects decision of whether to upload a file, so it does not matter if the files had
+                #   changed between this run and the actual checksum computation for metadata generation.
+                # (Those changes will possibly make some file changed between two runs not uploaded during this sync,
+                #  but it is correctable by later syncs.)
                 walk_list = [(f, stat_map[f]) for f in file_list]
                 if conf.use_file_checksum:
                     keep = (
@@ -118,8 +125,8 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                 res.metadata['files'].append(remote_file)
                 res.total_size += walk_res.total_size
                 res.total_files += walk_res.total_files
-                # we don't care about cross-child hard links here,
-                # since it would be handled already by the previous sync
+                # We don't care about cross-child hard links here,
+                #   since it would be handled already by the previous sync
                 res.hard_link_map.update(walk_res.hard_link_map)
             else:
                 remote_del(remote_file['name'].encode())
@@ -195,6 +202,11 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
         return res
 
     res.set_force_retain(path)
+    res.retained_directories.append(path)
+    for i in dir_result_map.values():
+        if i.retained_directories:
+            res.retained_directories += i.retained_directories
+        res.files_to_delete += i.files_to_delete
     if conf.grouping_order == 'size':
         group_list = sorted(size_map, key=lambda x: (size_map[x], x))
     elif conf.grouping_order == 'mtime':
@@ -211,8 +223,12 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
         group_size += size_map[child]
         current_group.append(child)
         if group_size > conf.merge_threshold or i == len(group_list) - 1:
+            while True:
+                upload_name = f'{conf.reserved_prefix}{file_idx:05d}.tar'
+                if upload_name not in remote_names:
+                    break
+                file_idx += 1
             current_group.sort()
-            upload_name = f'{conf.reserved_prefix}{file_idx:05d}.tar'
             meta_item = {'name': upload_name, 'list': [encode_child(f) for f in current_group]}
             if conf.use_file_checksum:
                 meta_item['file_size_checksum'] = multifile_checksum(current_group, False).hexdigest()
@@ -220,7 +236,22 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
             else:
                 meta_item['mtime_checksum'] = multifile_checksum(current_group, False).hexdigest()
             res.metadata['files'].append(meta_item)
-            if not upload(current_group, posixpath.join(remote_path, upload_name)):
+            upload_list: List[bytes] = []
+            for f in current_group:
+                if f in dir_result_map:
+                    upload_list += list(dir_result_map[f].files_to_tar)
+                else:
+                    upload_list.append(os.path.join(path, f))
+            for idx in range(len(upload_list)):
+                assert path == upload_list[idx][:len(path)], f'{path} {upload_list[idx]}'
+                upload_list[idx] = os.path.relpath(upload_list[idx], path)
+            upload_list.sort()
+            # TODO: update hard_link_list, hard_link_map
+            # If the file state changed from A to B between the checksum computation and the time of upload,
+            #   and later rollbacked to A, the remote will stay at state B and remain undetected by further syncs.
+            # This is also the reason that we always include mtime in checksum, so that this edge case is less likely to
+            #   happen without intentional action.
+            if not upload(upload_list, posixpath.join(remote_path, upload_name)):
                 log_name = repr(os.path.join(path, upload_name.encode()))[1:]
                 msg = f'{log_name} failed to upload'
                 if conf.error_abort:
