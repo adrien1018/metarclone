@@ -149,15 +149,17 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                     res.metadata['children'][encode_child(child)] = child_res.metadata
                 else:
                     size_map[child] = child_res.total_size + child_res.total_files * conf.file_base_bytes
-                res.total_transfer_size += child_res.total_size
-                res.total_transfer_files += child_res.total_files
+                res.total_size += child_res.total_size
+                res.total_files += child_res.total_files
+                res.total_transfer_size += child_res.total_transfer_size
+                res.total_transfer_files += child_res.total_transfer_files
         else:
             reg_files.append(child)
             size_map[child] = child_st.st_size + conf.file_base_bytes
+            res.total_size += child_st.st_size
+            res.total_files += 1
             res.total_transfer_size += child_st.st_size
             res.total_transfer_files += 1
-    res.total_size += res.total_transfer_size
-    res.total_files += res.total_transfer_files
 
     def multifile_checksum(names: List[bytes], second_pass: bool, hash_obj=None):
         """
