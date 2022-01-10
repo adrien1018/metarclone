@@ -2,6 +2,7 @@ import hashlib
 
 
 class SyncConfig:
+    metadata_version = 1  # reserved for future use
     same_device = False
     file_base_bytes = 64
     merge_threshold = 10 * 1024 * 1024

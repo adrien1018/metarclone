@@ -10,6 +10,12 @@ from .checksum import init_file_checksum, one_file_checksum, checksum_walk, Chec
 from .utils import wrap_oserror
 
 
+class SyncState:
+    def __init__(self):
+        self.hard_link_map: Dict[Tuple[int, int], bytes] = {}
+        self.hard_link_list: List[Tuple[bytes, bytes]] = []
+
+
 class SyncWalkResult:
     def __init__(self):
         # The values of an empty directory
@@ -18,8 +24,7 @@ class SyncWalkResult:
         self.total_transfer_size = 0
         self.total_transfer_files = 1
         self.force_retain = False
-        self.hard_link_map: Dict[Tuple[int, int], bytes] = {}
-        self.hard_link_list: List[Tuple[bytes, bytes]] = []
+        self.hard_link_map: Optional[Dict[Tuple[int, int], bytes]] = {}
         # files_to_tar is None -> some child has already tar'd
         # not include the current directory
         self.files_to_tar: Optional[Set[bytes]] = set()
@@ -35,10 +40,11 @@ class SyncWalkResult:
             self.files_to_tar = None
             self.metadata = {'files': [], 'children': {}}
             self.retained_directories = [path]
+            self.hard_link_map = None
 
 
 def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Optional[dict], conf: SyncConfig,
-                is_root: bool) -> Optional[SyncWalkResult]:
+                state: SyncState, is_root: bool) -> Optional[SyncWalkResult]:
     """
     Metadata format:
     {
@@ -55,12 +61,17 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
         <b32encode of name>: (another metadata), ...
       },
     }
+
+    Note that we upload each inode once in every tar file it is in, so hard links across different tar files will be
+      uploaded multiple times.
+    It is possible to only upload once for each inode globally, but it requires extra metadata information and passes to
+      check and correctly update changes of the hardlink structure, so currently we do not implement it.
     """
     # noinspection PyUnusedLocal
-    scan = None
+    dir_list: Optional[List[bytes]] = None
     with wrap_oserror(conf, path):
-        scan = os.scandir(path)
-    if scan is None:
+        dir_list = os.listdir(path)
+    if dir_list is None:
         return None
 
     res = SyncWalkResult()
@@ -84,15 +95,13 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
         # TODO
         return True
 
-    with scan as it:
-        # noinspection PyUnresolvedReferences
-        local_map: Dict[bytes, os.DirEntry] = {f.name: f for f in it}
-        stat_map: Dict[bytes, os.stat_result] = {}
-        for child in local_map:
-            with wrap_oserror(conf, os.path.join(path, child)):
-                stat_map[child] = local_map[child].stat(follow_symlinks=False)
-        # all stat'able children
-        child_list: Set[bytes] = set(stat_map)
+    stat_map: Dict[bytes, os.stat_result] = {}
+    for child in dir_list:
+        child_path = os.path.join(path, child)
+        with wrap_oserror(conf, child_path):
+            stat_map[child] = os.stat(child_path, follow_symlinks=False)
+    # all stat'able children
+    child_list: Set[bytes] = set(stat_map)
 
     # check metadata
     remote_names: Set[bytes] = set()
@@ -125,22 +134,21 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                 res.metadata['files'].append(remote_file)
                 res.total_size += walk_res.total_size
                 res.total_files += walk_res.total_files
-                # We don't care about cross-child hard links here,
-                #   since it would be handled already by the previous sync
-                res.hard_link_map.update(walk_res.hard_link_map)
+                # We don't care about cross-tar hard links here,
+                #   since it would already be handled by the previous sync
+                state.hard_link_map.update(walk_res.hard_link_map)
             else:
                 remote_del(remote_file['name'].encode())
 
     # all children that needs to be uploaded
     dir_result_map: Dict[bytes, SyncWalkResult] = {}
     size_map: Dict[bytes, int] = {}
-    reg_files: List[bytes] = []
     for child in child_list:
         child_st = stat_map[child]
         if stat.S_ISDIR(child_st.st_mode):
             meta_child = metadata and metadata['children'].get(encode_child(child))
             child_res = upload_walk(os.path.join(path, child), posixpath.join(remote_path, encode_child(child)),
-                                    child_st, meta_child, conf, False)
+                                    child_st, meta_child, conf, state, False)
             if child_res is not None:
                 dir_result_map[child] = child_res
                 if child_res.force_retain:
@@ -153,8 +161,8 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                 res.total_files += child_res.total_files
                 res.total_transfer_size += child_res.total_transfer_size
                 res.total_transfer_files += child_res.total_transfer_files
+                res.files_to_delete += child_res.files_to_delete
         else:
-            reg_files.append(child)
             size_map[child] = child_st.st_size + conf.file_base_bytes
             res.total_size += child_st.st_size
             res.total_files += 1
@@ -204,11 +212,6 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
         return res
 
     res.set_force_retain(path)
-    res.retained_directories.append(path)
-    for i in dir_result_map.values():
-        if i.retained_directories:
-            res.retained_directories += i.retained_directories
-        res.files_to_delete += i.files_to_delete
     if conf.grouping_order == 'size':
         group_list = sorted(size_map, key=lambda x: (size_map[x], x))
     elif conf.grouping_order == 'mtime':
@@ -225,12 +228,14 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
         group_size += size_map[child]
         current_group.append(child)
         if group_size > conf.merge_threshold or i == len(group_list) - 1:
+            current_group.sort()
+            # Find an available filename
             while True:
                 upload_name = f'{conf.reserved_prefix}{file_idx:05d}.tar'
                 if upload_name not in remote_names:
                     break
                 file_idx += 1
-            current_group.sort()
+            # Update metadata
             meta_item = {'name': upload_name, 'list': [encode_child(f) for f in current_group]}
             if conf.use_file_checksum:
                 meta_item['file_size_checksum'] = multifile_checksum(current_group, False).hexdigest()
@@ -238,21 +243,40 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
             else:
                 meta_item['mtime_checksum'] = multifile_checksum(current_group, False).hexdigest()
             res.metadata['files'].append(meta_item)
+
+            # Get list of all files need to be tar'd and update hardlink map
             upload_list: List[bytes] = []
-            for f in current_group:
-                if f in dir_result_map:
-                    upload_list += list(dir_result_map[f].files_to_tar)
+            new_hardlinks: Dict[Tuple[int, int], bytes] = {}
+
+            def update_hardlink_map(key: Tuple[int, int], fpath: bytes):
+                if key in state.hard_link_map:
+                    state.hard_link_list.append((state.hard_link_map[key], fpath))
                 else:
-                    upload_list.append(os.path.join(path, f))
+                    new_hardlinks[key] = fpath
+
+            for f in current_group:
+                f_st = stat_map[f]
+                if stat.S_ISDIR(f_st.st_mode):
+                    f_res = dir_result_map[f]
+                    upload_list += list(f_res.files_to_tar)
+                    for item_key, item_path in f_res.hard_link_map.items():
+                        update_hardlink_map(item_key, item_path)
+                else:
+                    f_path = os.path.join(path, f)
+                    upload_list.append(f_path)
+                    if f_st.st_nlink > 1:
+                        update_hardlink_map((f_st.st_dev, f_st.st_ino), f_path)
+            state.hard_link_map.update(new_hardlinks)
+
+            # Make paths relative to current path
             for idx in range(len(upload_list)):
                 assert path == upload_list[idx][:len(path)], f'{path} {upload_list[idx]}'
                 upload_list[idx] = os.path.relpath(upload_list[idx], path)
             upload_list.sort()
-            # TODO: update hard_link_list, hard_link_map
+
             # If the file state changed from A to B between the checksum computation and the time of upload,
             #   and later rollbacked to A, the remote will stay at state B and remain undetected by further syncs.
-            # This is also the reason that we always include mtime in checksum, so that this edge case is less likely to
-            #   happen without intentional action.
+            # Since we detect mtime changes, this edge case is less likely to happen without intentional action.
             if not upload(upload_list, posixpath.join(remote_path, upload_name)):
                 log_name = repr(os.path.join(path, upload_name.encode()))[1:]
                 msg = f'{log_name} failed to upload'
@@ -260,7 +284,9 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                     raise RuntimeError(msg)
                 else:
                     logging.warning(msg)
+
             current_group = []
             group_size = 0
             file_idx += 1
+
     return res
