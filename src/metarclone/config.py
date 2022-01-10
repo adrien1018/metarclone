@@ -17,4 +17,6 @@ class SyncConfig:
     rclone_args = []
     compression = 'gzip'  # passed to tar's -I option
     compression_suffix = '.gz'
+    tar_command = 'tar'
+    rclone_command = 'rclone'
     # TODO: add allowed device list (same_fs bool and fs_num int)

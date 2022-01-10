@@ -8,6 +8,7 @@ from typing import Dict, Tuple, Optional, List, Set
 from .config import SyncConfig
 from .checksum import init_file_checksum, one_file_checksum, checksum_walk, ChecksumWalkResult
 from .utils import wrap_oserror
+from .rclone import rclone_upload
 
 
 class SyncState:
@@ -23,6 +24,8 @@ class SyncWalkResult:
         self.total_files = 1
         self.total_transfer_size = 0
         self.total_transfer_files = 1
+        self.real_transfer_size = 0
+        self.real_transfer_files = 0
         self.force_retain = False
         self.hard_link_map: Optional[Dict[Tuple[int, int], bytes]] = {}
         # files_to_tar is None -> some child has already tar'd
@@ -92,7 +95,11 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
 
     def upload(files: List[bytes], dest: str) -> bool:
         print(f'Upload {path}/{files} -> {dest}')
-        # TODO
+        nbytes = rclone_upload(path, files, dest, conf)
+        if nbytes < 0:
+            return False
+        res.real_transfer_size += nbytes
+        res.real_transfer_files += 1
         return True
 
     stat_map: Dict[bytes, os.stat_result] = {}
@@ -155,6 +162,8 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                     res.set_force_retain(path)
                     res.retained_directories += child_res.retained_directories
                     res.metadata['children'][encode_child(child)] = child_res.metadata
+                    res.real_transfer_size += child_res.real_transfer_size
+                    res.real_transfer_files += child_res.real_transfer_files
                 else:
                     size_map[child] = child_res.total_size + child_res.total_files * conf.file_base_bytes
                 res.total_size += child_res.total_size
@@ -231,7 +240,7 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
             current_group.sort()
             # Find an available filename
             while True:
-                upload_name = f'{conf.reserved_prefix}{file_idx:05d}.tar'
+                upload_name = f'{conf.reserved_prefix}{file_idx:05d}.tar{conf.compression_suffix}'
                 if upload_name not in remote_names:
                     break
                 file_idx += 1
@@ -289,4 +298,24 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
             group_size = 0
             file_idx += 1
 
+    return res
+
+
+def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: SyncConfig) -> Optional[SyncWalkResult]:
+    st = os.stat(path)
+    state = SyncState()
+    res = upload_walk(path, remote_path, st, metadata and metadata['meta'], conf, state, True)
+    if not res:
+        return None
+    if conf.delete_after_upload:
+        for i in res.files_to_delete:
+            # TODO
+            pass
+    root_name = f'{conf.reserved_prefix}ROOT.tar{conf.compression_suffix}'
+    # always update retained directories
+    nbytes = rclone_upload(path, sorted(res.retained_directories), posixpath.join(remote_path, root_name), conf)
+    if nbytes >= 0:
+        res.real_transfer_size += nbytes
+        res.real_transfer_files += 1
+    res.metadata = {'meta': res.metadata, 'hard_links': []}  # TODO
     return res
