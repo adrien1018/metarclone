@@ -6,7 +6,7 @@ from typing import Dict, Tuple, Optional, List, Set
 
 from disjoint_set import DisjointSet
 
-from .config import SyncConfig
+from .config import UploadConfig
 from .checksum import init_file_checksum, one_file_checksum, checksum_walk, ChecksumWalkResult
 from .utils import wrap_oserror, decode_child, encode_child
 from .rclone import rclone_upload, rclone_delete
@@ -48,7 +48,7 @@ class SyncWalkResult:
             self.hard_link_map = None
 
 
-def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Optional[dict], conf: SyncConfig,
+def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Optional[dict], conf: UploadConfig,
                 state: SyncState, is_root: bool) -> Optional[SyncWalkResult]:
     """
     Metadata format:
@@ -311,7 +311,7 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
     return res
 
 
-def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: SyncConfig) -> Optional[SyncWalkResult]:
+def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: UploadConfig) -> Optional[SyncWalkResult]:
     st = os.stat(path)
     state = SyncState()
     res = upload_walk(path, remote_path, st, metadata and metadata['meta'], conf, state, True)
@@ -331,6 +331,7 @@ def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: SyncCo
         hard_link_djs.union(x, y)
     res.metadata = {'version': conf.metadata_version,
                     'meta': res.metadata,
+                    'root_name': root_name,
                     'checksum': {
                         'use_file_checksum': conf.use_file_checksum,
                         'use_directory_mtime': conf.use_directory_mtime,

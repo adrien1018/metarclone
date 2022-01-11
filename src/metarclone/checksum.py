@@ -15,15 +15,15 @@ class ChecksumWalkResult:
 
 
 def init_file_checksum(name: bytes, st: os.stat_result, conf: SyncConfig):
-    is_dir = stat.S_ISDIR(st.st_mode)
-    if is_dir:
-        init_byte = b'\0' if conf.use_directory_mtime else b'\1'
+    hash_obj = conf.hash_function(conf.head_bytes() + name + st.st_mode.to_bytes(4, 'little'))
+    if stat.S_ISDIR(st.st_mode):
+        if conf.use_directory_mtime:
+            hash_obj.update(st.st_mtime_ns.to_bytes(16, 'little', signed=True))
+        if conf.use_owner:
+            hash_obj.update(st.st_uid.to_bytes(4, 'little') + st.st_gid.to_bytes(4, 'little'))
+        return conf.hash_function(hash_obj.digest())
     else:
-        init_byte = b'\0' if conf.use_file_checksum else b'\1'
-    hash_obj = conf.hash_function(init_byte + name + st.st_mode.to_bytes(4, 'little'))
-    if is_dir and conf.use_directory_mtime:
-        hash_obj.update(st.st_mtime_ns.to_bytes(16, 'little', signed=True))
-    return hash_obj
+        return hash_obj
 
 
 def get_file_content_checksum(full_path: bytes, st: os.stat_result, conf: SyncConfig) -> Optional[bytes]:
@@ -62,6 +62,8 @@ def one_file_checksum(name: bytes, full_path: bytes, st: os.stat_result, conf: S
         hash_obj.update(file_hash)
     else:
         hash_obj.update(st.st_size.to_bytes(16, 'little') + st.st_mtime_ns.to_bytes(16, 'little', signed=True))
+        if conf.use_owner:
+            hash_obj.update(st.st_uid.to_bytes(4, 'little') + st.st_gid.to_bytes(4, 'little'))
     return hash_obj.digest()
 
 
@@ -106,28 +108,25 @@ def checksum_walk(names: List[Tuple[bytes, os.stat_result]], path: bytes, conf: 
                   second_pass: bool, result: Optional[ChecksumWalkResult] = None) -> str:
     """
     Checksum of a file S(file) :=
-      H(b'\0' + file.name + file.st_mode.to_bytes(4, 'little') +
-        H(file.content))                                      <if conf.use_file_checksum and second_pass>
-      H(b'\0' + file.name + file.st_mode.to_bytes(4, 'little')) +
-        file.st_size.to_bytes(16, 'little') +
-        file.st_mtime_ns.to_bytes(16, 'little', signed=True)) <if conf.use_file_checksum and not second_pass>
-      H(b'\1' + file.name + file.st_mode.to_bytes(4, 'little')) +
-        file.st_size.to_bytes(16, 'little') +
-        file.st_mtime_ns.to_bytes(16, 'little', signed=True)) <otherwise>
+      H(conf.head_bytes() + file.name + file.st_mode.to_bytes(4, 'little') +
+        H(file.content))      <if conf.use_file_checksum and second_pass>
+      H(conf.head_bytes() + file.name + file.st_mode.to_bytes(4, 'little')) +
+        file.st_size.to_bytes(16, 'little') + file.st_mtime_ns.to_bytes(16, 'little', signed=True)
+        [ + file.st_uid.to_bytes(4, 'little') + file.st_gid.to_bytes(4, 'little') <if conf.use_owner>]
+       ) <otherwise>
     file.content is the content for regular files, destination for soft links, and empty for other files
 
     Checksum of a directory S(dir) :=
-      H(H(b'\0' + dir.name + dir.st_mode.to_bytes(4, 'little') +
-          dir.st_mtime_ns.to_bytes(16, 'little', signed=True)) +
-        b''.join([S(f) for f in sorted(os.listdir(dir), key=f.name)])) <if conf.use_directory_mtime>
-      H(H(b'\1' + dir.name + dir.st_mode.to_bytes(4, 'little')) +
-        b''.join([S(f) for f in sorted(os.listdir(dir), key=f.name)])) <otherwise>
+      H(H(conf.head_bytes() + dir.name + dir.st_mode.to_bytes(4, 'little') +
+          [ + dir.st_mtime_ns.to_bytes(16, 'little', signed=True) <if conf.use_directory_mtime>]
+          [ + dir.st_uid.to_bytes(4, 'little') + dir.st_gid.to_bytes(4, 'little') <if conf.use_owner>]
+         ) + b''.join([S(f) for f in sorted(os.listdir(dir), key=f.name)]))
 
     Checksum of a group of same-level files checksum_walk(group) :=
       H(b''.join([S(f) for f in sorted(files, key=f.name)]))
     checksum_walk returns value in hexdigest for storing it in JSON
 
-    The prepended b'\0' or b'\1' byte is to ensure that different checksum settings give different results.
+    The prepended conf.head_bytes() is to ensure that different checksum settings give different results.
     H is config.hash_function (default is SHA1 for checksum speed)
     Note: all hashed content contains at most one variable-length input
 

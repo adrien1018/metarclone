@@ -1,2 +1,2 @@
-from .config import SyncConfig
+from .config import SyncConfig, UploadConfig
 from .upload import upload
