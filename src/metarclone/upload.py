@@ -8,7 +8,7 @@ from typing import Dict, Tuple, Optional, List, Set
 from .config import SyncConfig
 from .checksum import init_file_checksum, one_file_checksum, checksum_walk, ChecksumWalkResult
 from .utils import wrap_oserror
-from .rclone import rclone_upload
+from .rclone import rclone_upload, rclone_delete
 
 
 class SyncState:
@@ -31,17 +31,18 @@ class SyncWalkResult:
         # files_to_tar is None -> some child has already tar'd
         # not include the current directory
         self.files_to_tar: Optional[Set[bytes]] = set()
-        self.files_to_delete: List[bytes] = []
+        self.files_to_delete: List[Tuple[str, bool]] = []
         self.retained_directories: Optional[List[bytes]] = None
         self.metadata: Optional[dict] = None
         self.first_checksum: Optional[bytes] = None
         self.second_checksum: Optional[bytes] = None
+        self.error_count: int = 0
 
     def set_force_retain(self, path: bytes):
         if not self.force_retain:
             self.force_retain = True
             self.files_to_tar = None
-            self.metadata = {'files': [], 'children': {}}
+            self.metadata = {'files': {}, 'children': {}}
             self.retained_directories = [path]
             self.hard_link_map = None
 
@@ -51,15 +52,14 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
     """
     Metadata format:
     {
-      "files": [ // each represents a remote file
-        {
-          "name": "xxx.tar", // always .tar and contains only [A-Za-z0-9_.]
+      "files": { // each represents a remote file
+        "xxx.tar.gz": { // filename, contains only [A-Za-z0-9_.]
           "list": [b32encode of first-layer dir/files],
           "file_size_checksum": "...", <if conf.use_file_checksum>
           "file_checksum": "...", <if conf.use_file_checksum>
           "mtime_checksum": "...", <if not conf.use_file_checksum>
         }
-      ],
+      },
       "children": {
         <b32encode of name>: (another metadata), ...
       },
@@ -86,15 +86,18 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
     def encode_child(name: bytes):
         return b32encode(name).decode().rstrip('=')
 
-    def remote_del(name: bytes):
+    def remote_del(name: str, is_dir: bool):
+        del_path = os.path.join(remote_path, name)
         if conf.delete_after_upload:
-            res.files_to_delete.append(os.path.join(path, name))
+            res.files_to_delete.append((del_path, is_dir))
         else:
-            print(f'Delete {os.path.join(path, name)}')
-            # TODO
+            # logging.debug(f'Delete {os.path.join(remote_path, name)}')
+            if not rclone_delete(del_path, is_dir, conf):
+                logging.warning(f'Failed to delete remote: {del_path}')
+                res.error_count += 1
 
-    def upload(files: List[bytes], dest: str) -> bool:
-        print(f'Upload {path}/{files} -> {dest}')
+    def remote_upload(files: List[bytes], dest: str) -> bool:
+        # logging.debug(f'Upload {path}/{files} -> {dest}')
         nbytes = rclone_upload(path, files, dest, conf)
         if nbytes < 0:
             return False
@@ -111,9 +114,10 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
     child_list: Set[bytes] = set(stat_map)
 
     # check metadata
-    remote_names: Set[bytes] = set()
-    if metadata and 'files' in metadata:
-        for remote_file in metadata['files']:
+    remote_names: Set[str] = set()
+    if metadata:
+        for filename, remote_file in metadata['files'].items():
+            filename: str
             file_list: List[bytes] = [decode_child(i) for i in remote_file['list']]
             keep = False
             walk_res = ChecksumWalkResult()
@@ -136,16 +140,25 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                             checksum_walk(walk_list, path, conf, False, walk_res) == remote_file['mtime_checksum'])
             if keep:
                 child_list.difference_update(file_list)
-                remote_names.add(remote_file['name'])
+                remote_names.add(filename)
                 res.set_force_retain(path)
-                res.metadata['files'].append(remote_file)
+                res.metadata['files'][filename] = remote_file
                 res.total_size += walk_res.total_size
                 res.total_files += walk_res.total_files
                 # We don't care about cross-tar hard links here,
                 #   since it would already be handled by the previous sync
                 state.hard_link_map.update(walk_res.hard_link_map)
             else:
-                remote_del(remote_file['name'].encode())
+                # Note that because we base32-encoded directory names, they will never clash with tar names because of
+                #   the .tar extension
+                remote_del(filename, False)
+                if conf.delete_after_upload:
+                    remote_names.add(filename)
+
+        # Delete remote directories
+        for i in metadata['children']:
+            if decode_child(i) not in child_list or not stat.S_ISDIR(stat_map[decode_child(i)].st_mode):
+                remote_del(i, True)
 
     # all children that needs to be uploaded
     dir_result_map: Dict[bytes, SyncWalkResult] = {}
@@ -171,6 +184,7 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                 res.total_transfer_size += child_res.total_transfer_size
                 res.total_transfer_files += child_res.total_transfer_files
                 res.files_to_delete += child_res.files_to_delete
+                res.error_count += child_res.error_count
         else:
             size_map[child] = child_st.st_size + conf.file_base_bytes
             res.total_size += child_st.st_size
@@ -245,13 +259,13 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                     break
                 file_idx += 1
             # Update metadata
-            meta_item = {'name': upload_name, 'list': [encode_child(f) for f in current_group]}
+            meta_item = {'list': [encode_child(f) for f in current_group]}
             if conf.use_file_checksum:
                 meta_item['file_size_checksum'] = multifile_checksum(current_group, False).hexdigest()
                 meta_item['file_checksum'] = multifile_checksum(current_group, True).hexdigest()
             else:
                 meta_item['mtime_checksum'] = multifile_checksum(current_group, False).hexdigest()
-            res.metadata['files'].append(meta_item)
+            res.metadata['files'][upload_name] = meta_item
 
             # Get list of all files need to be tar'd and update hardlink map
             upload_list: List[bytes] = []
@@ -283,16 +297,17 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                 upload_list[idx] = os.path.relpath(upload_list[idx], path)
             upload_list.sort()
 
+            remote_name = posixpath.join(remote_path, upload_name)
+            logging.info(f'Upload {current_group} in {repr(path)[1:]} to {remote_name}')
             # If the file state changed from A to B between the checksum computation and the time of upload,
             #   and later rollbacked to A, the remote will stay at state B and remain undetected by further syncs.
             # Since we detect mtime changes, this edge case is less likely to happen without intentional action.
-            if not upload(upload_list, posixpath.join(remote_path, upload_name)):
+            if not remote_upload(upload_list, remote_name):
                 log_name = repr(os.path.join(path, upload_name.encode()))[1:]
-                msg = f'{log_name} failed to upload'
-                if conf.error_abort:
-                    raise RuntimeError(msg)
-                else:
-                    logging.warning(msg)
+                logging.warning(f'Failed to upload: {log_name}')
+                # delete from metadata so later syncs can detect it
+                del res.metadata['files'][upload_name]
+                res.error_count += 1
 
             current_group = []
             group_size = 0
@@ -307,10 +322,9 @@ def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: SyncCo
     res = upload_walk(path, remote_path, st, metadata and metadata['meta'], conf, state, True)
     if not res:
         return None
-    if conf.delete_after_upload:
-        for i in res.files_to_delete:
-            # TODO
-            pass
+    for file, is_dir in res.files_to_delete:
+        if not rclone_delete(file, is_dir, conf):
+            res.error_count += 1
     root_name = f'{conf.reserved_prefix}ROOT.tar{conf.compression_suffix}'
     # always update retained directories
     nbytes = rclone_upload(path, sorted(res.retained_directories), posixpath.join(remote_path, root_name), conf)

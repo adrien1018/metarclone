@@ -4,9 +4,11 @@ import tempfile
 import threading
 from io import RawIOBase
 from typing import List
-from subprocess import Popen, PIPE
+from subprocess import run, Popen, PIPE, DEVNULL
 
 from .config import SyncConfig
+
+__all__ = ['rclone_upload', 'rclone_delete']
 
 
 def read_thread(f, res: List[bytes] = None):
@@ -27,17 +29,17 @@ def rclone_upload(path: bytes, files: List[bytes], dest: str, conf: SyncConfig) 
             tar_cmd += [b'-I', conf.compression.encode()]
         tar_cmd += [b'--null', b'--ignore-failed-read', b'--no-recursion',
                     b'-C', path, b'-T', fname.encode(), b'-Scf', b'-']
+        rclone_cmd = [conf.rclone_command, 'rcat', *conf.rclone_args, dest]
+        logging.debug(f'Invoke command: {tar_cmd}')
         tar_proc = Popen(tar_cmd, stdout=PIPE, stderr=PIPE)
-        rclone_proc = Popen([conf.rclone_command, 'rcat', dest], stdin=PIPE, stdout=PIPE, stderr=PIPE)
+        logging.debug(f'Invoke command: {rclone_cmd}')
+        rclone_proc = Popen(rclone_cmd, stdin=PIPE, stdout=DEVNULL, stderr=PIPE)
 
         buffer = memoryview(bytearray(256 * 1024))
-        stdout = []
         stderr = []
         tarerr = []
-        throut = threading.Thread(target=read_thread, args=(rclone_proc.stdout, stdout))
         threrr = threading.Thread(target=read_thread, args=(rclone_proc.stderr, stderr))
         thrtarerr = threading.Thread(target=read_thread, args=(tar_proc.stderr, tarerr))
-        throut.start()
         threrr.start()
         thrtarerr.start()
         with tar_proc.stdout as fp, rclone_proc.stdin as out:
@@ -47,16 +49,25 @@ def rclone_upload(path: bytes, files: List[bytes], dest: str, conf: SyncConfig) 
             for n in iter(lambda: fp.readinto(buffer), 0):
                 out.write(buffer[:n])
                 total_bytes += n
-        throut.join()
         threrr.join()
         thrtarerr.join()
         status = tar_proc.wait(), rclone_proc.wait()
         if status[1]:
-            logging.warning(f'rclone failed: {stderr[0]}')
+            logging.warning(f'rclone rcat failed with status {status[1]}: {stderr[0]}')
             return -1
         if status[0]:
-            logging.warning(f'tar failed: {tarerr[0]}')
+            logging.warning(f'tar failed with status {status[1]}: {tarerr[0]}')
             return -1
         return total_bytes
     finally:
         os.remove(fname)
+
+
+def rclone_delete(path: str, is_dir: bool, conf: SyncConfig) -> bool:
+    rclone_cmd = [conf.rclone_command, 'purge' if is_dir else 'delete', *conf.rclone_args, path]
+    logging.debug(f'Invoke command: {rclone_cmd}')
+    res = run(rclone_cmd, capture_output=True)
+    if res.returncode:
+        logging.warning(f'rclone purge failed with status{res.returncode}: {res.stderr}')
+        return False
+    return True
