@@ -2,12 +2,13 @@ import logging
 import os
 import posixpath
 import stat
-from base64 import b32decode, b32encode
 from typing import Dict, Tuple, Optional, List, Set
+
+from disjoint_set import DisjointSet
 
 from .config import SyncConfig
 from .checksum import init_file_checksum, one_file_checksum, checksum_walk, ChecksumWalkResult
-from .utils import wrap_oserror
+from .utils import wrap_oserror, decode_child, encode_child
 from .rclone import rclone_upload, rclone_delete
 
 
@@ -72,19 +73,12 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
     """
     # noinspection PyUnusedLocal
     dir_list: Optional[List[bytes]] = None
-    with wrap_oserror(conf, path):
+    with wrap_oserror(path):
         dir_list = os.listdir(path)
     if dir_list is None:
         return None
 
     res = SyncWalkResult()
-
-    def decode_child(name: str):
-        pad_length = len(name) % 8
-        return b32decode(name + '=' * (pad_length and 8 - pad_length))
-
-    def encode_child(name: bytes):
-        return b32encode(name).decode().rstrip('=')
 
     def remote_del(name: str, is_dir: bool):
         del_path = os.path.join(remote_path, name)
@@ -105,10 +99,16 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
         res.real_transfer_files += 1
         return True
 
+    def update_hardlink_map(key: Tuple[int, int], fpath: bytes, new_hardlinks: Dict[Tuple[int, int], bytes]):
+        if key in state.hard_link_map:
+            state.hard_link_list.append((state.hard_link_map[key], fpath))
+        else:
+            new_hardlinks[key] = fpath
+
     stat_map: Dict[bytes, os.stat_result] = {}
     for child in dir_list:
         child_path = os.path.join(path, child)
-        with wrap_oserror(conf, child_path):
+        with wrap_oserror(child_path):
             stat_map[child] = os.stat(child_path, follow_symlinks=False)
     # all stat'able children
     child_list: Set[bytes] = set(stat_map)
@@ -145,9 +145,11 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                 res.metadata['files'][filename] = remote_file
                 res.total_size += walk_res.total_size
                 res.total_files += walk_res.total_files
-                # We don't care about cross-tar hard links here,
-                #   since it would already be handled by the previous sync
-                state.hard_link_map.update(walk_res.hard_link_map)
+                # Update for complete hardlink metadata
+                hardlinks: Dict[Tuple[int, int], bytes] = {}
+                for item_key, item_path in walk_res.hard_link_map.items():
+                    update_hardlink_map(item_key, item_path, hardlinks)
+                state.hard_link_map.update(hardlinks)
             else:
                 # Note that because we base32-encoded directory names, they will never clash with tar names because of
                 #   the .tar extension
@@ -269,27 +271,20 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
 
             # Get list of all files need to be tar'd and update hardlink map
             upload_list: List[bytes] = []
-            new_hardlinks: Dict[Tuple[int, int], bytes] = {}
-
-            def update_hardlink_map(key: Tuple[int, int], fpath: bytes):
-                if key in state.hard_link_map:
-                    state.hard_link_list.append((state.hard_link_map[key], fpath))
-                else:
-                    new_hardlinks[key] = fpath
-
+            hardlinks: Dict[Tuple[int, int], bytes] = {}
             for f in current_group:
                 f_st = stat_map[f]
                 if stat.S_ISDIR(f_st.st_mode):
                     f_res = dir_result_map[f]
                     upload_list += list(f_res.files_to_tar)
                     for item_key, item_path in f_res.hard_link_map.items():
-                        update_hardlink_map(item_key, item_path)
+                        update_hardlink_map(item_key, item_path, hardlinks)
                 else:
                     f_path = os.path.join(path, f)
                     upload_list.append(f_path)
                     if f_st.st_nlink > 1:
-                        update_hardlink_map((f_st.st_dev, f_st.st_ino), f_path)
-            state.hard_link_map.update(new_hardlinks)
+                        update_hardlink_map((f_st.st_dev, f_st.st_ino), f_path, hardlinks)
+            state.hard_link_map.update(hardlinks)
 
             # Make paths relative to current path
             for idx in range(len(upload_list)):
@@ -331,5 +326,16 @@ def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: SyncCo
     if nbytes >= 0:
         res.real_transfer_size += nbytes
         res.real_transfer_files += 1
-    res.metadata = {'meta': res.metadata, 'hard_links': []}  # TODO
+    hard_link_djs = DisjointSet()
+    for x, y in state.hard_link_list:
+        hard_link_djs.union(x, y)
+    res.metadata = {'version': conf.metadata_version,
+                    'meta': res.metadata,
+                    'checksum': {
+                        'use_file_checksum': conf.use_file_checksum,
+                        'use_directory_mtime': conf.use_directory_mtime,
+                        'hash_function': conf.hash_function().name,
+                    },
+                    'hard_links': [{'group': [encode_child(os.path.relpath(j, path)) for j in i]}
+                                   for i in hard_link_djs.itersets()]}
     return res

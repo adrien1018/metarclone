@@ -1,14 +1,22 @@
 import logging
+from base64 import b32decode, b32encode
 from contextlib import contextmanager
 
-from .config import SyncConfig
+__all__ = ['wrap_oserror', 'decode_child', 'encode_child']
 
 
 @contextmanager
-def wrap_oserror(conf: SyncConfig, path: bytes):
+def wrap_oserror(path: bytes):
     try:
         yield
     except OSError as e:
-        if conf.error_abort:
-            raise e from None
         logging.warning(f'Error accessing {repr(path)[1:]}: {e}')
+
+
+def decode_child(name: str):
+    pad_length = len(name) % 8
+    return b32decode(name + '=' * (pad_length and 8 - pad_length))
+
+
+def encode_child(name: bytes):
+    return b32encode(name).decode().rstrip('=')

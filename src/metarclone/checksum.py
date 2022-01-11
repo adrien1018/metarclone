@@ -1,32 +1,27 @@
-import logging
 import os
 import stat
-from contextlib import contextmanager
 from io import FileIO
 from typing import Dict, Tuple, Optional, List
 
 from .config import SyncConfig
+from .utils import wrap_oserror
 
 
 class ChecksumWalkResult:
-    total_size = 0
-    total_files = 0
-    hard_link_map: Dict[Tuple[int, int], bytes] = {}
-
-
-@contextmanager
-def wrap_oserror(conf: SyncConfig, path: bytes):
-    try:
-        yield
-    except OSError as e:
-        if conf.error_abort:
-            raise e from None
-        logging.warning(f'Error accessing {repr(path)[1:]}: {e}')
+    def __init__(self):
+        self.total_size = 0
+        self.total_files = 0
+        self.hard_link_map: Dict[Tuple[int, int], bytes] = {}
 
 
 def init_file_checksum(name: bytes, st: os.stat_result, conf: SyncConfig):
-    hash_obj = conf.hash_function(name + st.st_mode.to_bytes(4, 'little'))
-    if stat.S_ISDIR(st.st_mode) and conf.use_directory_mtime:
+    is_dir = stat.S_ISDIR(st.st_mode)
+    if is_dir:
+        init_byte = b'\0' if conf.use_directory_mtime else b'\1'
+    else:
+        init_byte = b'\0' if conf.use_file_checksum else b'\1'
+    hash_obj = conf.hash_function(init_byte + name + st.st_mode.to_bytes(4, 'little'))
+    if is_dir and conf.use_directory_mtime:
         hash_obj.update(st.st_mtime_ns.to_bytes(16, 'little', signed=True))
     return hash_obj
 
@@ -37,7 +32,7 @@ def get_file_content_checksum(full_path: bytes, st: os.stat_result, conf: SyncCo
     file_hash_obj = conf.hash_function()
     if stat.S_ISREG(st.st_mode):
         buffer = memoryview(bytearray(256 * 1024))
-        with wrap_oserror(conf, full_path):
+        with wrap_oserror(full_path):
             # auto typing is incorrect
             # noinspection PyTypeChecker
             fp: FileIO = open(full_path, 'rb', buffering=0)
@@ -46,7 +41,7 @@ def get_file_content_checksum(full_path: bytes, st: os.stat_result, conf: SyncCo
                 file_hash_obj.update(buffer[:n])
             success = True
     elif stat.S_ISLNK(st.st_mode):
-        with wrap_oserror(conf, full_path):
+        with wrap_oserror(full_path):
             file_hash_obj.update(os.readlink(full_path))
             success = True
     else:
@@ -79,7 +74,7 @@ def file_checksum(name: bytes, full_path: bytes, st: os.stat_result, conf: SyncC
         hash_obj = init_file_checksum(name, st, conf)
         # noinspection PyUnusedLocal
         scan = None
-        with wrap_oserror(conf, full_path):
+        with wrap_oserror(full_path):
             scan = os.scandir(full_path)
         if scan is None:
             # Because of the signature definition,
@@ -88,7 +83,7 @@ def file_checksum(name: bytes, full_path: bytes, st: os.stat_result, conf: SyncC
         with scan as it:
             lst: List[os.DirEntry] = sorted(it, key=lambda x: x.name)
             for f in lst:
-                with wrap_oserror(conf, f.path):
+                with wrap_oserror(f.path):
                     f_st = f.stat(follow_symlinks=False)
                     sig = file_checksum(f.name, f.path, f_st, conf, second_pass, result)
                     hash_obj.update(sig)
@@ -111,24 +106,28 @@ def checksum_walk(names: List[Tuple[bytes, os.stat_result]], path: bytes, conf: 
                   second_pass: bool, result: Optional[ChecksumWalkResult] = None) -> str:
     """
     Checksum of a file S(file) :=
-      H(file.name + file.st_mode.to_bytes(4, 'little') +
-        H(file.content))      <if conf.use_file_checksum and second_pass>
-      H(file.name + file.st_mode.to_bytes(4, 'little')) +
+      H(b'\0' + file.name + file.st_mode.to_bytes(4, 'little') +
+        H(file.content))                                      <if conf.use_file_checksum and second_pass>
+      H(b'\0' + file.name + file.st_mode.to_bytes(4, 'little')) +
+        file.st_size.to_bytes(16, 'little') +
+        file.st_mtime_ns.to_bytes(16, 'little', signed=True)) <if conf.use_file_checksum and not second_pass>
+      H(b'\1' + file.name + file.st_mode.to_bytes(4, 'little')) +
         file.st_size.to_bytes(16, 'little') +
         file.st_mtime_ns.to_bytes(16, 'little', signed=True)) <otherwise>
     file.content is the content for regular files, destination for soft links, and empty for other files
 
     Checksum of a directory S(dir) :=
-      H(H(dir.name + dir.st_mode.to_bytes(4, 'little') +
-          dir.st_mtime_ns.to_bytes(16, 'little', signed=True))) +
+      H(H(b'\0' + dir.name + dir.st_mode.to_bytes(4, 'little') +
+          dir.st_mtime_ns.to_bytes(16, 'little', signed=True)) +
         b''.join([S(f) for f in sorted(os.listdir(dir), key=f.name)])) <if conf.use_directory_mtime>
-      H(H(dir.name + dir.st_mode.to_bytes(4, 'little')) +
+      H(H(b'\1' + dir.name + dir.st_mode.to_bytes(4, 'little')) +
         b''.join([S(f) for f in sorted(os.listdir(dir), key=f.name)])) <otherwise>
 
     Checksum of a group of same-level files checksum_walk(group) :=
       H(b''.join([S(f) for f in sorted(files, key=f.name)]))
     checksum_walk returns value in hexdigest for storing it in JSON
 
+    The prepended b'\0' or b'\1' byte is to ensure that different checksum settings give different results.
     H is config.hash_function (default is SHA1 for checksum speed)
     Note: all hashed content contains at most one variable-length input
 
