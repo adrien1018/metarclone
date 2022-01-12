@@ -72,11 +72,16 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
       check and correctly update changes of the hardlink structure, so currently we do not implement it.
     """
     # noinspection PyUnusedLocal
-    dir_list: Optional[List[bytes]] = None
+    dir_list: Optional[Set[bytes]] = None
     with wrap_oserror(path):
-        dir_list = os.listdir(path)
+        dir_list = set(os.listdir(path))
     if dir_list is None:
         return None
+    # process include/exclude list
+    includes = set([i for i in dir_list if os.path.join(path, i) in conf.include_list])
+    if includes:
+        dir_list = includes
+    dir_list = set([i for i in dir_list if os.path.join(path, i) not in conf.exclude_list])
 
     res = SyncWalkResult()
 

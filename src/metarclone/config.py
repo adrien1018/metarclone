@@ -1,4 +1,6 @@
 import hashlib
+import os
+from typing import Set, Iterable
 
 
 class SyncConfig:
@@ -36,3 +38,19 @@ class UploadConfig(SyncConfig):
         self.grouping_order = 'size'
         self.reserved_prefix = '_METARCLONE_'  # must be [0-9A-Z_]
         self.compression_suffix = '.gz'
+        # these lists should be already joined with base path and without ending slash
+        # include_list should have all possible prefixes in the set
+        self.include_list: Set[bytes] = set()
+        self.exclude_list: Set[bytes] = set()
+
+    def set_include_list(self, path: bytes, orig_include_list: Iterable[bytes]):
+        for i in orig_include_list:
+            npath = os.path.normpath(i)
+            while os.path.splitdrive(npath)[1]:
+                self.include_list.add(os.path.join(path, npath))
+                npath = os.path.split(npath)[0]
+
+    def set_exclude_list(self, path: bytes, orig_exclude_list: Iterable[bytes]):
+        for i in orig_exclude_list:
+            self.exclude_list.add(os.path.join(path, os.path.normpath(i)))
+
