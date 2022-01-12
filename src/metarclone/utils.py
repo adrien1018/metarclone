@@ -2,7 +2,7 @@ import logging
 from base64 import b32decode, b32encode
 from contextlib import contextmanager
 
-__all__ = ['wrap_oserror', 'decode_child', 'encode_child']
+__all__ = ['wrap_oserror', 'decode_child', 'encode_child', 'win_to_posix']
 
 
 @contextmanager
@@ -20,3 +20,7 @@ def decode_child(name: str):
 
 def encode_child(name: bytes):
     return b32encode(name).decode().rstrip('=')
+
+
+def win_to_posix(path: bytes):
+    return path.replace(b'\\', b'/')

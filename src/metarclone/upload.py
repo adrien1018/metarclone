@@ -321,8 +321,9 @@ def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: Upload
         if not rclone_delete(file, is_dir, conf):
             res.error_count += 1
     root_name = f'{conf.reserved_prefix}ROOT.tar{conf.compression_suffix}'
+    dir_to_tar = [os.path.relpath(i, path) for i in sorted(res.retained_directories)]
     # always update retained directories
-    nbytes = rclone_upload(path, sorted(res.retained_directories), posixpath.join(remote_path, root_name), conf)
+    nbytes = rclone_upload(path, dir_to_tar, posixpath.join(remote_path, root_name), conf)
     if nbytes >= 0:
         res.real_transfer_size += nbytes
         res.real_transfer_files += 1
