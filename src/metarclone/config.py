@@ -5,6 +5,8 @@ from typing import Set, Iterable
 
 class SyncConfig:
     def __init__(self):
+        # if True, treat destination as empty; that is, upload / download without checking checksums and existing files
+        self.dest_as_empty = False
         self.use_file_checksum = False
         self.use_owner = False
         self.use_directory_mtime = False
@@ -26,6 +28,14 @@ class SyncConfig:
             (1 << 2 if self.use_directory_mtime else 0)
         )
         return bytes([first_byte, 0, 0, 0])
+
+    def set_hash_function(self, name: str):
+        if name not in hashlib.algorithms_available:
+            raise NameError('Hash function not found')
+        if name in dir(hashlib):
+            self.hash_function = getattr(hashlib, name)
+        else:
+            self.hash_function = hashlib.new(name)
 
 
 class UploadConfig(SyncConfig):

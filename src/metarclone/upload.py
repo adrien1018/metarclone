@@ -12,13 +12,13 @@ from .utils import wrap_oserror, decode_child, encode_child
 from .rclone import rclone_upload, rclone_delete
 
 
-class SyncState:
+class UploadState:
     def __init__(self):
         self.hard_link_map: Dict[Tuple[int, int], bytes] = {}
         self.hard_link_list: List[Tuple[bytes, bytes]] = []
 
 
-class SyncWalkResult:
+class UploadWalkResult:
     def __init__(self):
         # The values of an empty directory
         self.total_size = 0
@@ -49,7 +49,7 @@ class SyncWalkResult:
 
 
 def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Optional[dict], conf: UploadConfig,
-                state: SyncState, is_root: bool) -> Optional[SyncWalkResult]:
+                state: UploadState, is_root: bool) -> Optional[UploadWalkResult]:
     """
     Metadata format:
     {
@@ -83,7 +83,7 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
         dir_list = includes
     dir_list = set([i for i in dir_list if os.path.join(path, i) not in conf.exclude_list])
 
-    res = SyncWalkResult()
+    res = UploadWalkResult()
 
     def remote_del(name: str, is_dir: bool):
         del_path = os.path.join(remote_path, name)
@@ -120,7 +120,7 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
 
     # check metadata
     remote_names: Set[str] = set()
-    if metadata:
+    if metadata and not conf.dest_as_empty:
         for filename, remote_file in metadata['files'].items():
             filename: str
             file_list: List[bytes] = [decode_child(i) for i in remote_file['list']]
@@ -168,7 +168,7 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                 remote_del(i, True)
 
     # all children that needs to be uploaded
-    dir_result_map: Dict[bytes, SyncWalkResult] = {}
+    dir_result_map: Dict[bytes, UploadWalkResult] = {}
     size_map: Dict[bytes, int] = {}
     for child in child_list:
         child_st = stat_map[child]
@@ -316,9 +316,9 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
     return res
 
 
-def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: UploadConfig) -> Optional[SyncWalkResult]:
+def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: UploadConfig) -> Optional[UploadWalkResult]:
     st = os.stat(path)
-    state = SyncState()
+    state = UploadState()
     res = upload_walk(path, remote_path, st, metadata and metadata['meta'], conf, state, True)
     if not res:
         return None
@@ -341,6 +341,7 @@ def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: Upload
                     'checksum': {
                         'use_file_checksum': conf.use_file_checksum,
                         'use_directory_mtime': conf.use_directory_mtime,
+                        'use_owner': conf.use_owner,
                         'hash_function': conf.hash_function().name,
                     },
                     'hard_links': [{'group': [encode_child(os.path.relpath(j, path)) for j in i]}
