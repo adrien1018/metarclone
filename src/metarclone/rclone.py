@@ -3,13 +3,13 @@ import os
 import tempfile
 import threading
 from io import RawIOBase
-from typing import List
+from typing import List, Optional
 from subprocess import run, Popen, PIPE, DEVNULL
 
 from .config import SyncConfig, UploadConfig
 from .utils import win_to_posix
 
-__all__ = ['rclone_upload', 'rclone_download', 'rclone_delete']
+__all__ = ['rclone_upload', 'rclone_download', 'rclone_upload_raw', 'rclone_download_raw', 'rclone_delete']
 
 BUF_SIZE = 256 * 1024
 
@@ -103,6 +103,26 @@ def rclone_download(path: str, dest: bytes, conf: SyncConfig) -> int:
         logging.warning(f'tar failed with status {status[1]}: {tarerr[0]}')
         return -1
     return total_bytes
+
+
+def rclone_upload_raw(dest: str, content: bytes, conf: SyncConfig) -> bool:
+    rclone_cmd = [conf.rclone_command, 'rcat', *conf.rclone_args, dest]
+    logging.debug(f'Invoke command: {rclone_cmd}')
+    result = run(rclone_cmd, input=content, capture_output=True)
+    if result.returncode:
+        logging.warning(f'rclone rcat failed with status {result.returncode}: {result.stderr}')
+        return False
+    return True
+
+
+def rclone_download_raw(dest: str, conf: SyncConfig) -> Optional[bytes]:
+    rclone_cmd = [conf.rclone_command, 'cat', *conf.rclone_args, dest]
+    logging.debug(f'Invoke command: {rclone_cmd}')
+    result = run(rclone_cmd, capture_output=True)
+    if result.returncode:
+        logging.warning(f'rclone cat failed with status {result.returncode}: {result.stderr}')
+        return None
+    return result.stdout
 
 
 def rclone_delete(path: str, is_dir: bool, conf: SyncConfig) -> bool:

@@ -1,6 +1,5 @@
 import argparse
 import re
-import sys
 
 from .config import SyncConfig, UploadConfig, DownloadConfig
 from .upload import upload
@@ -23,6 +22,8 @@ def get_parser():
         parser.add_argument('-I', '--use-compress-program')
         parser.add_argument('--tar-path')
         parser.add_argument('--rclone-path')
+        parser.add_argument('--reserved-prefix')
+        parser.add_argument('--metadata-path')
 
     upload_parser = subparsers.add_parser('upload', help='Upload to rclone remote')
     add_sync_arguments(upload_parser)
@@ -30,7 +31,6 @@ def get_parser():
     upload_parser.add_argument('--merge-threshold')
     upload_parser.add_argument('--delete-after-upload', action='store_false')
     upload_parser.add_argument('--grouping-order')
-    upload_parser.add_argument('--reserved-prefix')
     upload_parser.add_argument('--compression-suffix')
     upload_parser.add_argument('--exclude-file', action='append')
     upload_parser.add_argument('--include-file', action='append')
@@ -63,6 +63,11 @@ def populate_sync_config(args: argparse.Namespace, conf: SyncConfig):
         conf.tar_command = args.tar_path
     if args.rclone_path is not None:
         conf.rclone_command = args.rclone_path
+    if args.reserved_prefix is not None:
+        if not re.fullmatch(r'[0-9A-Z_]*', args.reserved_prefix):
+            raise ValueError("Reserved prefix should only contain upper-case alphanumeric characters or '_'.")
+        conf.reserved_prefix = args.reserved_prefix
+    conf.metadata_path = args.metadata_path
 
 
 def upload_func(args: argparse.Namespace):
@@ -81,10 +86,6 @@ def upload_func(args: argparse.Namespace):
         if args.grouping_order not in ['size', 'mtime', 'ctime']:
             raise ValueError('Invalid grouping order.')
         conf.grouping_order = args.grouping_order
-    if args.reserved_prefix is not None:
-        if not re.fullmatch(r'[0-9A-Z_]*', args.reserved_prefix):
-            raise ValueError("Reserved prefix should only contain upper-case alphanumeric characters or '_'.")
-        conf.reserved_prefix = args.reserved_prefix
     if args.compression_suffix is not None:
         if not re.fullmatch(r'[0-9a-zA-Z_.]*', args.compression_suffix):
             raise ValueError("Compression suffix should only contain alphanumeric characters, '.' or '_'.")
@@ -99,16 +100,14 @@ def upload_func(args: argparse.Namespace):
         conf.set_include_list(src, map(lambda x: x.encode(), args.include_file))
     if args.exclude_file:
         conf.set_exclude_list(src, map(lambda x: x.encode(), args.exclude_file))
-    # TODO: load metadata
-    result = upload(src, dest, None, conf)
+    result = upload(src, dest, conf)
     print(result)
 
 
 def download_func(args: argparse.Namespace):
     conf = DownloadConfig()
     populate_sync_config(args, conf)
-    # TODO: load metadata
-    result = download(args.local.encode(), args.remote.encode(), {}, conf)
+    result = download(args.local.encode(), args.remote.encode(), conf)
     print(result)
 
 

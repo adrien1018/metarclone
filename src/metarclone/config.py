@@ -1,6 +1,6 @@
 import hashlib
 import os
-from typing import Set, Iterable, List
+from typing import Set, Iterable, List, Optional
 
 
 class SyncConfig:
@@ -19,6 +19,8 @@ class SyncConfig:
         self.compression = 'gzip'  # passed to tar's -I option
         self.tar_command = 'tar'
         self.rclone_command = 'rclone'
+        self.reserved_prefix = '_METARCLONE_'  # must be [0-9A-Z_]
+        self.metadata_path: Optional[str] = None
         # TODO: add allowed device list (same_fs bool and fs_num int)
 
     def head_bytes(self):
@@ -46,7 +48,6 @@ class UploadConfig(SyncConfig):
         self.merge_threshold = 10 * 1024 * 1024
         self.delete_after_upload = True
         self.grouping_order = 'size'
-        self.reserved_prefix = '_METARCLONE_'  # must be [0-9A-Z_]
         self.compression_suffix = '.gz'
         # these lists should be already joined with base path and without ending slash
         # include_list should have all possible prefixes in the set

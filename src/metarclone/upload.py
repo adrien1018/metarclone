@@ -10,6 +10,7 @@ from .config import UploadConfig
 from .checksum import init_file_checksum, one_file_checksum, checksum_walk, ChecksumWalkResult
 from .utils import wrap_oserror, decode_child, encode_child
 from .rclone import rclone_upload, rclone_delete
+from .metadata import *
 
 
 class UploadState:
@@ -316,7 +317,8 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
     return res
 
 
-def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: UploadConfig) -> Optional[UploadWalkResult]:
+def upload_meta(path: bytes, remote_path: str, metadata: Optional[dict],
+                conf: UploadConfig) -> Optional[UploadWalkResult]:
     st = os.stat(path)
     state = UploadState()
     res = upload_walk(path, remote_path, st, metadata and metadata['meta'], conf, state, True)
@@ -346,4 +348,14 @@ def upload(path: bytes, remote_path: str, metadata: Optional[dict], conf: Upload
                     },
                     'hard_links': [{'group': [encode_child(os.path.relpath(j, path)) for j in i]}
                                    for i in hard_link_djs.itersets()]}
+    return res
+
+
+def upload(path: bytes, remote_path: str, conf: UploadConfig) -> Optional[UploadWalkResult]:
+    # TODO: Display a warning if remote_path does not support instant retrieval and conf.metadata_path is None
+    metadata = load_metadata(remote_path, conf)
+    if metadata is None:
+        logging.warning('Metadata reading failed. It is normal if this is the first upload.')
+    res = upload_meta(path, remote_path, metadata, conf)
+    save_metadata(res.metadata, remote_path, conf)
     return res

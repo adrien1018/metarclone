@@ -3,7 +3,8 @@ import os
 import posixpath
 
 from .config import DownloadConfig
-from .utils import wrap_oserror, decode_child
+from .metadata import load_metadata
+from .utils import decode_child
 from .rclone import rclone_download
 
 
@@ -45,7 +46,7 @@ def download_walk(path: bytes, remote_path: str, metadata: dict, conf: DownloadC
     return res
 
 
-def download(path: bytes, remote_path: str, metadata: dict, conf: DownloadConfig) -> DownloadWalkResult:
+def download_meta(path: bytes, remote_path: str, metadata: dict, conf: DownloadConfig) -> DownloadWalkResult:
     meta_checksum = metadata['checksum']
     conf.use_file_checksum = meta_checksum['use_file_checksum']
     conf.use_directory_mtime = meta_checksum['use_directory_mtime']
@@ -83,3 +84,11 @@ def download(path: bytes, remote_path: str, metadata: dict, conf: DownloadConfig
         res.real_transfer_files += 1
         res.real_transfer_size += nbytes
     return res
+
+
+def download(path: bytes, remote_path: str, conf: DownloadConfig) -> DownloadWalkResult:
+    metadata = load_metadata(remote_path, conf)
+    if metadata is None:
+        logging.fatal('FATAL: Cannot load metadata.')
+        raise RuntimeError('Metadata reading failed')
+    return download_meta(path, remote_path, metadata, conf)
