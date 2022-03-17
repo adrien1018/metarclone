@@ -2,7 +2,7 @@ import logging
 import os
 import posixpath
 
-from .config import SyncConfig
+from .config import DownloadConfig
 from .utils import wrap_oserror, decode_child
 from .rclone import rclone_download
 
@@ -14,7 +14,7 @@ class DownloadWalkResult:
         self.error_count: int = 0
 
 
-def download_walk(path: bytes, remote_path: str, metadata: dict, conf: SyncConfig) -> DownloadWalkResult:
+def download_walk(path: bytes, remote_path: str, metadata: dict, conf: DownloadConfig) -> DownloadWalkResult:
     res = DownloadWalkResult()
     try:
         os.makedirs(path, exist_ok=True)
@@ -45,7 +45,7 @@ def download_walk(path: bytes, remote_path: str, metadata: dict, conf: SyncConfi
     return res
 
 
-def download(path: bytes, remote_path: str, metadata: dict, conf: SyncConfig) -> DownloadWalkResult:
+def download(path: bytes, remote_path: str, metadata: dict, conf: DownloadConfig) -> DownloadWalkResult:
     meta_checksum = metadata['checksum']
     conf.use_file_checksum = meta_checksum['use_file_checksum']
     conf.use_directory_mtime = meta_checksum['use_directory_mtime']

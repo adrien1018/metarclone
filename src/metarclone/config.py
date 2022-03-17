@@ -1,6 +1,6 @@
 import hashlib
 import os
-from typing import Set, Iterable
+from typing import Set, Iterable, List
 
 
 class SyncConfig:
@@ -15,7 +15,7 @@ class SyncConfig:
         #   (if applicable) if any non-fatal error occured during process.
         #   Use ignore_errors to suppress the non-zero exit code.
         self.ignore_errors = False
-        self.rclone_args = []
+        self.rclone_args: List[str] = []
         self.compression = 'gzip'  # passed to tar's -I option
         self.tar_command = 'tar'
         self.rclone_command = 'rclone'
@@ -53,6 +53,20 @@ class UploadConfig(SyncConfig):
         self.include_list: Set[bytes] = set()
         self.exclude_list: Set[bytes] = set()
 
+    def deduct_compression_suffix(self) -> bool:
+        compress_cmd = self.compression.split()
+        if not compress_cmd:
+            return False
+        compression = compress_cmd[0]
+        compression_map = {'gzip': '.gz', 'gunzip': '.gz', 'pigz': '.gz',
+                           'bzip2': '.bz2', 'bunzip2': '.bz2', 'pbzip2': '.bz2',
+                           'xz': '.xz', 'unxz': '.xz',
+                           'zstd': '.zst', 'unzstd': '.zst', 'pzstd': '.zst'}
+        if compression not in compression_map:
+            return False
+        self.compression_suffix = compression_map[compression]
+        return True
+
     def set_include_list(self, path: bytes, orig_include_list: Iterable[bytes]):
         for i in orig_include_list:
             npath = os.path.normpath(i)
@@ -64,3 +78,6 @@ class UploadConfig(SyncConfig):
         for i in orig_exclude_list:
             self.exclude_list.add(os.path.join(path, os.path.normpath(i)))
 
+
+class DownloadConfig(SyncConfig):
+    pass
