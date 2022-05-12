@@ -51,13 +51,16 @@ def rclone_upload(path: bytes, files: List[bytes], dest: str, conf: UploadConfig
         thrtarerr = threading.Thread(target=read_thread, args=(tar_proc.stderr, tarerr))
         threrr.start()
         thrtarerr.start()
-        with tar_proc.stdout as fp, rclone_proc.stdin as out:
-            fp: RawIOBase
-            out: RawIOBase
-            total_bytes = 0
-            for n in iter(lambda: fp.readinto(buffer), 0):
-                out.write(buffer[:n])
-                total_bytes += n
+        try:
+            with tar_proc.stdout as fp, rclone_proc.stdin as out:
+                fp: RawIOBase
+                out: RawIOBase
+                total_bytes = 0
+                for n in iter(lambda: fp.readinto(buffer), 0):
+                    out.write(buffer[:n])
+                    total_bytes += n
+        except BrokenPipeError:
+            pass
         threrr.join()
         thrtarerr.join()
         status = tar_proc.wait(), rclone_proc.wait()
@@ -92,13 +95,16 @@ def rclone_download(path: str, dest: bytes, conf: SyncConfig) -> int:
     thrtarerr = threading.Thread(target=read_thread, args=(tar_proc.stderr, tarerr))
     threrr.start()
     thrtarerr.start()
-    with rclone_proc.stdout as fp, tar_proc.stdin as out:
-        fp: RawIOBase
-        out: RawIOBase
-        total_bytes = 0
-        for n in iter(lambda: fp.readinto(buffer), 0):
-            out.write(buffer[:n])
-            total_bytes += n
+    try:
+        with rclone_proc.stdout as fp, tar_proc.stdin as out:
+            fp: RawIOBase
+            out: RawIOBase
+            total_bytes = 0
+            for n in iter(lambda: fp.readinto(buffer), 0):
+                out.write(buffer[:n])
+                total_bytes += n
+    except BrokenPipeError:
+        pass
     threrr.join()
     thrtarerr.join()
     status = tar_proc.wait(), rclone_proc.wait()

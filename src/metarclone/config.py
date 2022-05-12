@@ -19,7 +19,7 @@ class SyncConfig:
         #   Use ignore_errors to suppress the non-zero exit code.
         self.ignore_errors = False
         self.rclone_args: List[str] = []
-        self.compression = 'gzip'  # passed to tar's -I option
+        self.compression: Optional[str] = 'gzip'  # passed to tar's -I option
         self.tar_command = 'tar'
         self.rclone_command = 'rclone'
         self.reserved_prefix = '_METARCLONE_'  # must be [0-9A-Z_]
@@ -65,6 +65,10 @@ class UploadConfig(SyncConfig):
         self.exclude_list: Set[bytes] = set()
 
     def deduct_compression_suffix(self) -> bool:
+        if self.compression == 'none' or not self.compression:
+            self.compression = None
+            self.compression_suffix = ''
+            return True
         compress_cmd = self.compression.split()
         if not compress_cmd:
             return False

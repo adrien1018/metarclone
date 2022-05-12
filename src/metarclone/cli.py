@@ -21,6 +21,7 @@ def get_parser():
         parser.add_argument('--checksum-choice')
         parser.add_argument('--ignore-errors', action='store_true')
         parser.add_argument('--rclone-args')
+        # specify 'none' for no compression
         parser.add_argument('-I', '--use-compress-program')
         parser.add_argument('--tar-path')
         parser.add_argument('--rclone-path')
@@ -34,6 +35,7 @@ def get_parser():
     upload_parser.add_argument('--delete-after-upload', action='store_false')
     upload_parser.add_argument('--grouping-order')
     upload_parser.add_argument('--compression-suffix')
+    # specified by relative path from upload root or absolute path
     upload_parser.add_argument('--exclude-file', action='append')
     upload_parser.add_argument('--include-file', action='append')
     upload_parser.add_argument('local')
@@ -61,6 +63,8 @@ def populate_sync_config(args: argparse.Namespace, conf: SyncConfig):
         conf.rclone_args = args.rclone_args.split()
     if args.use_compress_program is not None:
         conf.compression = args.use_compress_program
+    if conf.compression == 'none':
+        conf.compression = None
     if args.tar_path is not None:
         conf.tar_command = args.tar_path
     if args.rclone_path is not None:
@@ -97,7 +101,7 @@ def upload_func(args: argparse.Namespace):
         if not conf.deduct_compression_suffix():
             raise ValueError('Unknown compression; please specify --compression-suffix')
 
-    src: bytes = args.local.encode()
+    src: bytes = os.path.normpath(args.local).encode()
     dest: str = args.remote
     if args.include_file:
         conf.set_include_list(src, map(lambda x: x.encode(), args.include_file))
