@@ -99,9 +99,9 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
             else:
                 res.total_deleted_files += 1
 
-    def remote_upload(files: List[bytes], dest: str) -> bool:
+    def remote_upload(files: List[bytes], dest: str, suggested_size: int) -> bool:
         # logging.debug(f'Upload {path}/{files} -> {dest}')
-        nbytes = rclone_upload(path, files, dest, conf)
+        nbytes = rclone_upload(path, files, dest, conf, suggested_size)
         if nbytes < 0:
             return False
         res.real_transfer_size += nbytes
@@ -307,7 +307,11 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
             # If the file state changed from A to B between the checksum computation and the time of upload,
             #   and later rollbacked to A, the remote will stay at state B and remain undetected by further syncs.
             # Since we detect mtime changes, this edge case is less likely to happen without intentional action.
-            if not remote_upload(upload_list, remote_name):
+            if not remote_upload(upload_list, remote_name, group_size):
+                # A extreme edge case may make upload fail: when conf.file_base_bytes is an underestimation so that
+                #   the real upload size is larger than ~50GiB (the S3 limit with the default chunk size) but
+                #   group_size is not, the upload function may fail to use the proper chunk size.
+                # This case needs an infeasibly large number of small files so we do not deal with this yet
                 log_name = repr(os.path.join(path, upload_name.encode()))[1:]
                 logging.warning(f'Failed to upload: {log_name}')
                 # delete from metadata so later syncs can detect it
@@ -337,7 +341,8 @@ def upload_meta(path: bytes, remote_path: str, metadata: Optional[dict],
     root_name = f'{conf.reserved_prefix}ROOT.tar{conf.compression_suffix}'
     dir_to_tar = [os.path.relpath(i, path) for i in sorted(res.retained_directories)]
     # always update retained directories
-    nbytes = rclone_upload(path, dir_to_tar, posixpath.join(remote_path, root_name), conf)
+    nbytes = rclone_upload(path, dir_to_tar, posixpath.join(remote_path, root_name), conf,
+                           len(dir_to_tar) * 4096)
     if nbytes >= 0:
         res.real_transfer_size += nbytes
         res.real_transfer_files += 1

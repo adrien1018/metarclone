@@ -21,7 +21,7 @@ def read_thread(f, res: List[bytes] = None):
         res.append(f.read())
 
 
-def rclone_upload(path: bytes, files: List[bytes], dest: str, conf: UploadConfig) -> int:
+def rclone_upload(path: bytes, files: List[bytes], dest: str, conf: UploadConfig, suggested_size: int = 0) -> int:
     with tempfile.NamedTemporaryFile('wb', delete=False) as f:
         fname = f.name
         f.write(b'\0'.join(files))
@@ -32,7 +32,13 @@ def rclone_upload(path: bytes, files: List[bytes], dest: str, conf: UploadConfig
             tar_cmd += [b'-I', conf.compression.encode()]
         tar_cmd += [b'--null', b'--ignore-failed-read', b'--no-recursion', b'-H', b'posix', b'--acls',
                     b'-C', path, b'-T', fname.encode(), b'-Scf', b'-']
-        rclone_cmd = [conf.rclone_command, 'rcat', *conf.rclone_args, dest]
+        rclone_cmd = [conf.rclone_command, 'rcat']
+        if suggested_size > (6000 * 5 * 1024**2):
+            # S3 can only upload 10000 blocks at once, and the minimum block size is 5MB
+            # Use 6000 as a safety measure
+            s3_block_size_mb = max(5, suggested_size // (6000 * 1024**2) + 1)
+            rclone_cmd.append(f'--s3-chunk-size={s3_block_size_mb}M')
+        rclone_cmd += [*conf.rclone_args, dest]
         logging.debug(f'Invoke command: {tar_cmd}')
         tar_proc = Popen(tar_cmd, stdout=PIPE, stderr=PIPE)
         logging.debug(f'Invoke command: {rclone_cmd}')
