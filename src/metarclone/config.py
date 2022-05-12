@@ -1,6 +1,9 @@
-import hashlib
 import os
+import hashlib
+import shutil
 from typing import Set, Iterable, List, Optional
+
+from metarclone.utils import cmd_to_abs_path
 
 
 class SyncConfig:
@@ -22,6 +25,7 @@ class SyncConfig:
         self.reserved_prefix = '_METARCLONE_'  # must be [0-9A-Z_]
         self.metadata_path: Optional[str] = None
         # TODO: add allowed device list (same_fs bool and fs_num int)
+        # TODO: allow encode_child/decode_child to be something other than base32
 
     def head_bytes(self):
         first_byte = (
@@ -38,6 +42,12 @@ class SyncConfig:
             self.hash_function = getattr(hashlib, name)
         else:
             self.hash_function = hashlib.new(name)
+
+    def convert_command_to_abs_path(self):
+        # In MinGW/Windows, direct exec will not use the PATH variable to find the executable properly,
+        #  so we do it manually here
+        self.tar_command = cmd_to_abs_path(self.tar_command)
+        self.rclone_command = cmd_to_abs_path(self.rclone_command)
 
 
 class UploadConfig(SyncConfig):

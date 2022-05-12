@@ -26,6 +26,7 @@ class UploadWalkResult:
         self.total_files = 1
         self.total_transfer_size = 0
         self.total_transfer_files = 1
+        self.total_deleted_files = 0
         self.real_transfer_size = 0
         self.real_transfer_files = 0
         self.force_retain = False
@@ -95,6 +96,8 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
             if not rclone_delete(del_path, is_dir, conf):
                 logging.warning(f'Failed to delete remote: {del_path}')
                 res.error_count += 1
+            else:
+                res.total_deleted_files += 1
 
     def remote_upload(files: List[bytes], dest: str) -> bool:
         # logging.debug(f'Upload {path}/{files} -> {dest}')
@@ -191,6 +194,7 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                 res.total_files += child_res.total_files
                 res.total_transfer_size += child_res.total_transfer_size
                 res.total_transfer_files += child_res.total_transfer_files
+                res.total_deleted_files += child_res.total_deleted_files
                 res.files_to_delete += child_res.files_to_delete
                 res.error_count += child_res.error_count
         else:
@@ -326,7 +330,10 @@ def upload_meta(path: bytes, remote_path: str, metadata: Optional[dict],
         return None
     for file, is_dir in res.files_to_delete:
         if not rclone_delete(file, is_dir, conf):
+            logging.warning(f'Failed to delete remote: {file}')
             res.error_count += 1
+        else:
+            res.total_deleted_files += 1
     root_name = f'{conf.reserved_prefix}ROOT.tar{conf.compression_suffix}'
     dir_to_tar = [os.path.relpath(i, path) for i in sorted(res.retained_directories)]
     # always update retained directories

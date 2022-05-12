@@ -1,8 +1,9 @@
 import logging
+import shutil
 from base64 import b32decode, b32encode
 from contextlib import contextmanager
 
-__all__ = ['wrap_oserror', 'decode_child', 'encode_child', 'win_to_posix']
+__all__ = ['wrap_oserror', 'decode_child', 'encode_child', 'win_to_posix', 'is_path', 'cmd_to_abs_path']
 
 
 @contextmanager
@@ -24,3 +25,16 @@ def encode_child(name: bytes):
 
 def win_to_posix(path: bytes):
     return path.replace(b'\\', b'/')
+
+
+def is_path(x: str):
+    return '/' in x or '\\' in x
+
+
+def cmd_to_abs_path(cmd: str):
+    if is_path(cmd):
+        return cmd
+    res = shutil.which(cmd)
+    if not res:
+        raise FileNotFoundError(f'Cannot find executable: {cmd}')
+    return res

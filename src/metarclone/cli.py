@@ -1,5 +1,7 @@
 import argparse
+import os
 import re
+import warnings
 
 from .config import SyncConfig, UploadConfig, DownloadConfig
 from .upload import upload
@@ -68,6 +70,7 @@ def populate_sync_config(args: argparse.Namespace, conf: SyncConfig):
             raise ValueError("Reserved prefix should only contain upper-case alphanumeric characters or '_'.")
         conf.reserved_prefix = args.reserved_prefix
     conf.metadata_path = args.metadata_path
+    conf.convert_command_to_abs_path()
 
 
 def upload_func(args: argparse.Namespace):
@@ -94,27 +97,36 @@ def upload_func(args: argparse.Namespace):
         if not conf.deduct_compression_suffix():
             raise ValueError('Unknown compression; please specify --compression-suffix')
 
-    src = args.local.encode()
-    dest = args.remote.encode()
+    src: bytes = args.local.encode()
+    dest: str = args.remote
     if args.include_file:
         conf.set_include_list(src, map(lambda x: x.encode(), args.include_file))
     if args.exclude_file:
         conf.set_exclude_list(src, map(lambda x: x.encode(), args.exclude_file))
     result = upload(src, dest, conf)
-    print(result)
+    print(result, result.__dict__)
 
 
 def download_func(args: argparse.Namespace):
     conf = DownloadConfig()
     populate_sync_config(args, conf)
-    result = download(args.local.encode(), args.remote.encode(), conf)
-    print(result)
+
+    dest: bytes = args.local.encode()
+    src: str = args.remote
+    result = download(dest, src, conf)
+    print(result, result.__dict__)
 
 
 def cli_entry():
     parser = get_parser()
     args = parser.parse_args()
     try:
+        if os.name == 'nt':
+            if 'MSYSTEM' not in os.environ:
+                warnings.warn('Running directly in Windows is not supported. This command is likely going to fail. '
+                              'Please install Git Bash or MSYS2 and run inside it.')
         args.func(args)
     except ValueError as e:
+        import traceback
+        traceback.print_exc()
         parser.error(str(e))

@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 import posixpath
@@ -16,7 +17,8 @@ def metadata_path(remote_path: str, conf: SyncConfig):
     if conf.metadata_path is None:
         return True, posixpath.join(remote_path, f'{conf.reserved_prefix}META.json.gz')
     else:
-        return ':' in conf.metadata_path, conf.metadata_path
+        return ':' in conf.metadata_path and ':\\' not in conf.metadata_path and ':/' not in conf.metadata_path, \
+               conf.metadata_path
 
 
 def load_metadata(remote_path: str, conf: SyncConfig):
@@ -26,7 +28,10 @@ def load_metadata(remote_path: str, conf: SyncConfig):
         if data is None:
             return None
         with BytesIO(data) as stream, GzipFile(mode='rb', fileobj=stream) as f:
-            return json.load(f)
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return None
     else:
         try:
             with open(path, 'rb') as stream, GzipFile(mode='rb', fileobj=stream) as f:
@@ -38,7 +43,8 @@ def load_metadata(remote_path: str, conf: SyncConfig):
 def save_metadata(metadata: dict, remote_path: str, conf: SyncConfig):
     with BytesIO() as stream:
         with GzipFile(mode='wb', fileobj=stream) as f:
-            json.dump(metadata, f)
+            with io.TextIOWrapper(f) as ftext:
+                json.dump(metadata, ftext)
         data = stream.getvalue()
     is_remote, path = metadata_path(remote_path, conf)
     if is_remote:
