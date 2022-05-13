@@ -59,7 +59,7 @@ def rclone_upload(path: bytes, files: List[bytes], dest: str, conf: UploadConfig
                 for n in iter(lambda: fp.readinto(buffer), 0):
                     out.write(buffer[:n])
                     total_bytes += n
-        except BrokenPipeError:
+        except OSError:
             pass
         threrr.join()
         thrtarerr.join()
@@ -103,7 +103,7 @@ def rclone_download(path: str, dest: bytes, conf: SyncConfig) -> int:
             for n in iter(lambda: fp.readinto(buffer), 0):
                 out.write(buffer[:n])
                 total_bytes += n
-    except BrokenPipeError:
+    except OSError:
         pass
     threrr.join()
     thrtarerr.join()

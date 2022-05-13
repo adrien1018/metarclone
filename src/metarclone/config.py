@@ -15,7 +15,7 @@ class SyncConfig:
         self.use_directory_mtime = False
         self.hash_function = hashlib.sha1
         # We emit a warning, exit with non-zero at the end and treat the file that caused the error as nonexistent
-        #   (if applicable) if any non-fatal error occured during process.
+        #   (if applicable) if any non-fatal error occurred.
         #   Use ignore_errors to suppress the non-zero exit code.
         self.ignore_errors = False
         self.rclone_args: List[str] = []

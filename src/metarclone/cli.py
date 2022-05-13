@@ -90,7 +90,7 @@ def upload_func(args: argparse.Namespace):
         conf.merge_threshold = int(merge_thresh[1]) * suffix_map[merge_thresh[2]]
     conf.delete_after_upload = args.delete_after_upload
     if args.grouping_order is not None:
-        if args.grouping_order not in ['size', 'mtime', 'ctime']:
+        if args.grouping_order not in ['size', 'mtime', 'ctime', 'name']:
             raise ValueError('Invalid grouping order.')
         conf.grouping_order = args.grouping_order
     if args.compression_suffix is not None:

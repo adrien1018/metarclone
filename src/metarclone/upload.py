@@ -253,6 +253,8 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
         group_list = sorted(size_map, key=lambda x: (stat_map[x].st_mtime_ns, x))
     elif conf.grouping_order == 'ctime':
         group_list = sorted(size_map, key=lambda x: (stat_map[x].st_ctime_ns, x))
+    elif conf.grouping_order == 'name':
+        group_list = sorted(size_map)
     else:
         raise NotImplementedError
 
@@ -329,6 +331,7 @@ def upload_meta(path: bytes, remote_path: str, metadata: Optional[dict],
                 conf: UploadConfig) -> Optional[UploadWalkResult]:
     st = os.stat(path)
     state = UploadState()
+    # TODO: use a thread pool for uploading
     res = upload_walk(path, remote_path, st, metadata and metadata['meta'], conf, state, True)
     if not res:
         return None
