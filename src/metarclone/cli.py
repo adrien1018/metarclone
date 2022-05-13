@@ -14,38 +14,75 @@ def get_parser():
                                             metavar='method', help=None)
 
     def add_sync_arguments(parser: argparse.ArgumentParser):
-        parser.add_argument('--dest-as-empty', action='store_true')
-        parser.add_argument('-c', '--use-file-checksum', action='store_true')
-        parser.add_argument('--use-directory-mtime', action='store_true')
-        parser.add_argument('--use-owner', action='store_true')
-        parser.add_argument('--checksum-choice')
-        parser.add_argument('--ignore-errors', action='store_true')
-        parser.add_argument('--rclone-args')
+        parser.add_argument('--dest-as-empty', action='store_true',
+                            help="Treat destination as empty; "
+                                 "that is, upload / download without checking checksums and existing files")
+        parser.add_argument('-c', '--use-file-checksum', action='store_true',
+                            help="Use whole-file checksum instead of timestamp to determine whether a file changed")
+        parser.add_argument('--use-directory-mtime', action='store_true',
+                            help="Update an aggregated file if the mtime of any directory in it changed")
+        parser.add_argument('--use-owner', action='store_true',
+                            help="Update a file if its ownership changed")
+        parser.add_argument('--checksum-choice', metavar='hashfn',
+                            help="The program hashes timestamps, filenames and other information in an aggregated file "
+                                 "into a single checksum using this checksum function. Default: sha1")
+        parser.add_argument('--ignore-errors', action='store_true',
+                            help="Suppress non-zero exit code (we emit a warning, exit with non-zero at the end and "
+                                 "treat the file that caused the error as nonexistent (if applicable) if "
+                                 "any non-fatal error occurred")
+        parser.add_argument('--rclone-args', metavar='args...',
+                            help='Additional arguments passed to rclone')
         # specify 'none' for no compression
-        parser.add_argument('-I', '--use-compress-program')
-        parser.add_argument('--tar-path')
-        parser.add_argument('--rclone-path')
-        parser.add_argument('--reserved-prefix')
-        parser.add_argument('--metadata-path')
+        parser.add_argument('-I', '--use-compress-program', metavar='prog[ args...]',
+                            help="Compression program (passed to tar's -I option); "
+                                 "specify 'none' to disable compression. "
+                                 "Must use the same compress program for upload and download. "
+                                 "Default: gzip")
+        parser.add_argument('--tar-path', metavar='path', help="The path to tar program")
+        parser.add_argument('--rclone-path', metavar='path', help="The path to rclone program")
+        parser.add_argument('--metadata-path', metavar='path',
+                            help="The path to metadata file; can be a local path or a remote path. "
+                                 "Defaults to _METARCLONE_META.json.gz under the remote path. "
+                                 "This file stores information of the current status of remote files, "
+                                 "so it must be instant retrievable. Full re-sync is needed if this file is lost.")
+        parser.add_argument('--reserved-prefix', metavar='prefix')
 
-    upload_parser = subparsers.add_parser('upload', help='Upload to rclone remote')
+    upload_parser = subparsers.add_parser('upload', usage="metarclone upload [-h] [options...] local remote",
+                                          help="Upload to rclone remote")
     add_sync_arguments(upload_parser)
-    upload_parser.add_argument('--file-base-bytes', type=int)
-    upload_parser.add_argument('--merge-threshold')
-    upload_parser.add_argument('--delete-after-upload', action='store_false')
-    upload_parser.add_argument('--grouping-order')
-    upload_parser.add_argument('--compression-suffix')
+    upload_parser.add_argument('--file-base-bytes', type=int, metavar='bytes',
+                               help="Add this size to each file and directory when calculating file size "
+                                    "for aggregation. Default: 64")
+    upload_parser.add_argument('--merge-threshold', metavar='size',
+                               help="Merge files or directories smaller than this threshold into larger files. "
+                                    "Use K,M,G,T suffix (case-insensitive) to indicate KiB,MiB,GiB,TiB. "
+                                    "A directory will contain at most one aggregated file smaller than this threshold. "
+                                    "Default: 10M")
+    upload_parser.add_argument('--delete-before-upload', dest='delete_after_upload', action='store_false',
+                               help="Delete remote unused files before upload "
+                                    "(default is deleting them after completing upload)")
+    upload_parser.add_argument('--grouping-order', metavar='order',
+                               help="Group files smaller than threshold using this order. "
+                                    "Possible choices: size, name, ctime, mtime. Default: size")
+    upload_parser.add_argument('--compression-suffix', metavar='suffix',
+                               help="The file suffix of compressed tarballs. "
+                                    "The program will try to deduct it if -I is specified. Default: .gz")
     # specified by relative path from upload root or absolute path
-    upload_parser.add_argument('--exclude-file', action='append')
-    upload_parser.add_argument('--include-file', action='append')
-    upload_parser.add_argument('local')
-    upload_parser.add_argument('remote')
+    upload_parser.add_argument('--exclude-file', action='append', metavar='path',
+                               help="Upload these files only. Specify once for each path. "
+                                    "Can be a relative path from local base path or an absolute path.")
+    upload_parser.add_argument('--include-file', action='append', metavar='path',
+                               help="Upload these files only. Specify once for each path. "
+                                    "Can be a relative path from local base path or an absolute path. ")
+    upload_parser.add_argument('local', help="Local base path")
+    upload_parser.add_argument('remote', help="Remote base path")
     upload_parser.set_defaults(func=upload_func)
 
-    download_parser = subparsers.add_parser('download', help='Download from rclone remote')
+    download_parser = subparsers.add_parser('download', usage="metarclone download [-h] [options...] remote local",
+                                            help='Download from rclone remote')
     add_sync_arguments(download_parser)
-    download_parser.add_argument('remote')
-    download_parser.add_argument('local')
+    download_parser.add_argument('remote', help="Remote base path")
+    download_parser.add_argument('local', help="Local base path")
     download_parser.set_defaults(func=download_func)
 
     return root_parser
