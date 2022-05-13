@@ -1,7 +1,8 @@
 import argparse
+import logging
 import os
 import re
-import warnings
+import sys
 
 from .config import SyncConfig, UploadConfig, DownloadConfig
 from .upload import upload
@@ -14,6 +15,10 @@ def get_parser():
                                             metavar='method', help=None)
 
     def add_sync_arguments(parser: argparse.ArgumentParser):
+        parser.add_argument('-v', dest='verbose', action='count', default=0,
+                            help="Verbose output. Use -vv for more verbosity.")
+        parser.add_argument('--stats', action='store_true',
+                            help="Output statistics at the end")
         parser.add_argument('--dest-as-empty', action='store_true',
                             help="Treat destination as empty; "
                                  "that is, upload / download without checking checksums and existing files")
@@ -58,6 +63,10 @@ def get_parser():
                                     "Use K,M,G,T suffix (case-insensitive) to indicate KiB,MiB,GiB,TiB. "
                                     "A directory will contain at most one aggregated file smaller than this threshold. "
                                     "Default: 10M")
+    upload_parser.add_argument('--s3-min-chunk-size', metavar='size',
+                               help="Minimum S3 upload chunk size. "
+                                    "(Do not specify --s3-chunk-size using --rclone-args, since metarclone "
+                                    "will increase chunk size automatically if the upload file size is large)")
     upload_parser.add_argument('--delete-before-upload', dest='delete_after_upload', action='store_false',
                                help="Delete remote unused files before upload "
                                     "(default is deleting them after completing upload)")
@@ -88,7 +97,22 @@ def get_parser():
     return root_parser
 
 
+def parse_size_bytes(x: str):
+    suffix_map = {'': 1024, 'b': 1, 'k': 1024, 'm': 1024 ** 2, 'g': 1024 ** 3, 't': 1024 ** 4}
+    match = re.fullmatch(r'(\d+(?:\.\d+)?)([bkmgt]?)', x.lower())
+    if not match:
+        raise ValueError('Invalid size pattern.')
+    return int(float(match[1]) * suffix_map[match[2]])
+
+
 def populate_sync_config(args: argparse.Namespace, conf: SyncConfig):
+    if args.verbose == 0:
+        logging.getLogger().setLevel(logging.WARNING)
+    elif args.verbose == 1:
+        logging.getLogger().setLevel(logging.INFO)
+    else:
+        logging.getLogger().setLevel(logging.DEBUG)
+
     conf.dest_as_empty = args.dest_as_empty
     conf.use_file_checksum = args.use_file_checksum
     conf.use_directory_mtime = args.use_directory_mtime
@@ -97,6 +121,8 @@ def populate_sync_config(args: argparse.Namespace, conf: SyncConfig):
         conf.set_hash_function(args.checksum_choice)
     conf.ignore_errors = args.ignore_errors
     if args.rclone_args is not None:
+        if 's3-chunk-size' in args.rclone_args:
+            logging.warning("Specifying --s3-chunk-size using --rclone-args will likely make large uploads fail.")
         conf.rclone_args = args.rclone_args.split()
     if args.use_compress_program is not None:
         conf.compression = args.use_compress_program
@@ -120,11 +146,9 @@ def upload_func(args: argparse.Namespace):
     if args.file_base_bytes is not None:
         conf.file_base_bytes = args.file_base_bytes
     if args.merge_threshold is not None:
-        suffix_map = {'': 1, 'k': 1024, 'm': 1024 ** 2, 'g': 1024 ** 3, 't': 1024 ** 4}
-        merge_thresh = re.fullmatch(r'(\d+)([kmgt]?)', args.merge_threshold.lower())
-        if not merge_thresh:
-            raise ValueError('Invalid size pattern.')
-        conf.merge_threshold = int(merge_thresh[1]) * suffix_map[merge_thresh[2]]
+        conf.merge_threshold = parse_size_bytes(args.merge_threshold)
+    if args.s3_min_chunk_size is not None:
+        conf.s3_min_chunk_size_kib = parse_size_bytes(args.s3_min_chunk_size) // 1024
     conf.delete_after_upload = args.delete_after_upload
     if args.grouping_order is not None:
         if args.grouping_order not in ['size', 'mtime', 'ctime', 'name']:
@@ -145,7 +169,16 @@ def upload_func(args: argparse.Namespace):
     if args.exclude_file:
         conf.set_exclude_list(src, map(lambda x: x.encode(), args.exclude_file))
     result = upload(src, dest, conf)
-    print(result, result.__dict__)
+
+    if args.stats:
+        print()
+        print(f'All files: {result.total_size} bytes, {result.total_files} files')
+        print(f'Files to transfer: {result.total_transfer_size} bytes, {result.total_transfer_files} files')
+        print(f'Sent to remote: {result.real_transfer_size} bytes, {result.real_transfer_files} files')
+        print(f'Deleted {result.total_deleted_files} remote files')
+    if result.error_count > 0:
+        logging.error(f'{result.error_count} errors occured; check previous output')
+        sys.exit(1)
 
 
 def download_func(args: argparse.Namespace):
@@ -157,6 +190,13 @@ def download_func(args: argparse.Namespace):
     result = download(dest, src, conf)
     print(result, result.__dict__)
 
+    if args.stats:
+        print()
+        print(f'Received from remote: {result.real_transfer_size} bytes, {result.real_transfer_files} files')
+    if result.error_count > 0:
+        logging.error(f'{result.error_count} errors occured; check previous output')
+        sys.exit(1)
+
 
 def cli_entry():
     parser = get_parser()
@@ -164,8 +204,8 @@ def cli_entry():
     try:
         if os.name == 'nt':
             if 'MSYSTEM' not in os.environ:
-                warnings.warn('Running directly in Windows is not supported. This command is likely going to fail. '
-                              'Please install Git Bash or MSYS2 and run inside it.')
+                logging.warning('Running directly in Windows is not supported. This command is likely going to fail. '
+                                'Please install Git Bash or MSYS2 and run inside it.')
         args.func(args)
     except ValueError as e:
         import traceback

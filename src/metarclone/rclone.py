@@ -12,6 +12,7 @@ from .utils import win_to_posix
 __all__ = ['rclone_upload', 'rclone_download', 'rclone_upload_raw', 'rclone_download_raw', 'rclone_delete']
 
 BUF_SIZE = 256 * 1024
+# TODO: deal with KeyboardInterrupt! (currently it just deadlocks waiting for read_thread)
 
 
 def read_thread(f, res: List[bytes] = None):
@@ -33,11 +34,13 @@ def rclone_upload(path: bytes, files: List[bytes], dest: str, conf: UploadConfig
         tar_cmd += [b'--null', b'--ignore-failed-read', b'--no-recursion', b'-H', b'posix', b'--acls',
                     b'-C', path, b'-T', fname.encode(), b'-Scf', b'-']
         rclone_cmd = [conf.rclone_command, 'rcat']
-        if suggested_size > (6000 * 5 * 1024**2):
+        if suggested_size > (6000 * conf.s3_min_chunk_size_kib * 1024):
             # S3 can only upload 10000 blocks at once, and the minimum block size is 5MB
             # Use 6000 as a safety measure
-            s3_block_size_mb = max(5, suggested_size // (6000 * 1024**2) + 1)
-            rclone_cmd.append(f'--s3-chunk-size={s3_block_size_mb}M')
+            s3_block_size_kib = max(conf.s3_min_chunk_size_kib, suggested_size // (6000 * 1024) + 1)
+            rclone_cmd.append(f'--s3-chunk-size={s3_block_size_kib}')
+        elif conf.s3_min_chunk_size_kib > 5 * 1024:
+            rclone_cmd.append(f'--s3-chunk-size={conf.s3_min_chunk_size_kib}')
         rclone_cmd += [*conf.rclone_args, dest]
         logging.debug(f'Invoke command: {tar_cmd}')
         tar_proc = Popen(tar_cmd, stdout=PIPE, stderr=PIPE)
