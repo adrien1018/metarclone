@@ -26,6 +26,8 @@ def get_parser():
                             help="Use whole-file checksum instead of timestamp to determine whether a file changed")
         parser.add_argument('--use-directory-mtime', action='store_true',
                             help="Update an aggregated file if the mtime of any directory in it changed")
+        parser.add_argument('--dry-run', action='store_true',
+                            help="Don't do any remote operations except downloading metadata")
         parser.add_argument('--use-owner', action='store_true',
                             help="Update a file if its ownership changed")
         parser.add_argument('--checksum-choice', metavar='hashfn',
@@ -116,6 +118,7 @@ def populate_sync_config(args: argparse.Namespace, conf: SyncConfig):
     conf.dest_as_empty = args.dest_as_empty
     conf.use_file_checksum = args.use_file_checksum
     conf.use_directory_mtime = args.use_directory_mtime
+    conf.dry_run = args.dry_run
     conf.use_owner = args.use_owner
     if args.checksum_choice is not None:
         conf.set_hash_function(args.checksum_choice)
@@ -172,6 +175,8 @@ def upload_func(args: argparse.Namespace):
 
     if args.stats:
         print()
+        if conf.dry_run:
+            print('(DRY RUN; those are simulated numbers)')
         print(f'All files: {result.total_size} bytes, {result.total_files} files')
         print(f'Files to transfer: {result.total_transfer_size} bytes, {result.total_transfer_files} files')
         print(f'Sent to remote: {result.real_transfer_size} bytes, {result.real_transfer_files} files')
@@ -188,7 +193,6 @@ def download_func(args: argparse.Namespace):
     dest: bytes = args.local.encode()
     src: str = args.remote
     result = download(dest, src, conf)
-    print(result, result.__dict__)
 
     if args.stats:
         print()

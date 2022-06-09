@@ -23,6 +23,8 @@ def read_thread(f, res: List[bytes] = None):
 
 
 def rclone_upload(path: bytes, files: List[bytes], dest: str, conf: UploadConfig, suggested_size: int = 0) -> int:
+    if conf.dry_run:
+        return 0
     with tempfile.NamedTemporaryFile('wb', delete=False) as f:
         fname = f.name
         f.write(b'\0'.join(files))
@@ -79,6 +81,8 @@ def rclone_upload(path: bytes, files: List[bytes], dest: str, conf: UploadConfig
 
 
 def rclone_download(path: str, dest: bytes, conf: SyncConfig) -> int:
+    if conf.dry_run:
+        return 0
     if os.name == 'nt':
         dest = win_to_posix(dest)
     rclone_cmd = [conf.rclone_command, 'cat', *conf.rclone_args, path]
@@ -121,6 +125,8 @@ def rclone_download(path: str, dest: bytes, conf: SyncConfig) -> int:
 
 
 def rclone_upload_raw(dest: str, content: bytes, conf: SyncConfig) -> bool:
+    if conf.dry_run:
+        return True
     rclone_cmd = [conf.rclone_command, 'rcat', *conf.rclone_args, dest]
     logging.debug(f'Invoke command: {rclone_cmd}')
     result = run(rclone_cmd, input=content, capture_output=True)
@@ -131,6 +137,7 @@ def rclone_upload_raw(dest: str, content: bytes, conf: SyncConfig) -> bool:
 
 
 def rclone_download_raw(dest: str, conf: SyncConfig) -> Optional[bytes]:
+    # Dry run still needs metadata
     rclone_cmd = [conf.rclone_command, 'cat', *conf.rclone_args, dest]
     logging.debug(f'Invoke command: {rclone_cmd}')
     result = run(rclone_cmd, capture_output=True)
@@ -141,6 +148,8 @@ def rclone_download_raw(dest: str, conf: SyncConfig) -> Optional[bytes]:
 
 
 def rclone_delete(path: str, is_dir: bool, conf: SyncConfig) -> bool:
+    if conf.dry_run:
+        return True
     rclone_cmd = [conf.rclone_command, 'purge' if is_dir else 'delete', *conf.rclone_args, path]
     logging.debug(f'Invoke command: {rclone_cmd}')
     res = run(rclone_cmd, capture_output=True)

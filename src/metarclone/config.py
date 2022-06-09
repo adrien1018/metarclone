@@ -25,6 +25,7 @@ class SyncConfig:
         self.reserved_prefix = '_METARCLONE_'  # must be [0-9A-Z_]
         self.metadata_path: Optional[str] = None
         self.s3_min_chunk_size_kib = 5 * 1024
+        self.dry_run = False
         # TODO: add allowed device list (same_fs bool and fs_num int)
         # TODO: allow encode_child/decode_child to be something other than base32
 

@@ -86,7 +86,9 @@ def file_checksum(name: bytes, full_path: bytes, st: os.stat_result, conf: SyncC
             lst: List[os.DirEntry] = sorted(it, key=lambda x: x.name)
             for f in lst:
                 with wrap_oserror(f.path):
-                    f_st = f.stat(follow_symlinks=False)
+                    # DirEntry.stat seems to give different st_mode result from f.stat
+                    # f_st = f.stat(follow_symlinks=False)
+                    f_st = os.stat(f.path, follow_symlinks=False)
                     sig = file_checksum(f.name, f.path, f_st, conf, second_pass, result)
                     hash_obj.update(sig)
         if result:

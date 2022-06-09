@@ -88,11 +88,12 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
     res = UploadWalkResult()
 
     def remote_del(name: str, is_dir: bool):
-        del_path = os.path.join(remote_path, name)
+        del_path = posixpath.join(remote_path, name)
         if conf.delete_after_upload:
+            logging.debug(f'Marked {del_path} to delete')
             res.files_to_delete.append((del_path, is_dir))
         else:
-            # logging.debug(f'Delete {os.path.join(remote_path, name)}')
+            logging.info(f'Deleting remote: {del_path}')
             if not rclone_delete(del_path, is_dir, conf):
                 logging.warning(f'Failed to delete remote: {del_path}')
                 res.error_count += 1
@@ -336,6 +337,7 @@ def upload_meta(path: bytes, remote_path: str, metadata: Optional[dict],
     if not res:
         return None
     for file, is_dir in res.files_to_delete:
+        logging.info(f'Deleting remote: {file}')
         if not rclone_delete(file, is_dir, conf):
             logging.warning(f'Failed to delete remote: {file}')
             res.error_count += 1

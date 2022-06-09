@@ -1,7 +1,9 @@
+import base64
 import io
 import json
 import logging
 import posixpath
+import sys
 from gzip import GzipFile
 from io import BytesIO
 from tempfile import NamedTemporaryFile
@@ -41,6 +43,8 @@ def load_metadata(remote_path: str, conf: SyncConfig):
 
 
 def save_metadata(metadata: dict, remote_path: str, conf: SyncConfig):
+    if conf.dry_run:
+        return
     with BytesIO() as stream:
         with GzipFile(mode='wb', fileobj=stream) as f:
             with io.TextIOWrapper(f) as ftext:
@@ -65,5 +69,7 @@ def save_metadata(metadata: dict, remote_path: str, conf: SyncConfig):
             'Success! Please store the metadata file properly and specify metadata file in subsequent runs. '
             'Otherwise, downloading would fail and uploading will upload the whole directory again.')
     except OSError as e:
-        logging.fatal('FATAL: Metadata writing failed.')
+        sys.stderr.write(base64.b64decode(data).decode())
+        logging.fatal('FATAL: Metadata writing failed. Copy the base64-encoded version of metadata '
+                      'and store it to a file manually')
         raise e from None
