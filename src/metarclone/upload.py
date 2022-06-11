@@ -175,6 +175,7 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
     # all children that needs to be uploaded
     dir_result_map: Dict[bytes, UploadWalkResult] = {}
     size_map: Dict[bytes, int] = {}
+    err_list: List[bytes] = []
     for child in child_list:
         child_st = stat_map[child]
         if stat.S_ISDIR(child_st.st_mode):
@@ -198,12 +199,16 @@ def upload_walk(path: bytes, remote_path: str, st: os.stat_result, metadata: Opt
                 res.total_deleted_files += child_res.total_deleted_files
                 res.files_to_delete += child_res.files_to_delete
                 res.error_count += child_res.error_count
+            else:
+                err_list.append(child)
         else:
             size_map[child] = child_st.st_size + conf.file_base_bytes
             res.total_size += child_st.st_size
             res.total_files += 1
             res.total_transfer_size += child_st.st_size
             res.total_transfer_files += 1
+
+    child_list.difference_update(err_list)
 
     def multifile_checksum(names: List[bytes], second_pass: bool, hash_obj=None):
         """
